@@ -1,0 +1,9 @@
+[search]
+# JobSpy search parameters. Set query and location to match your search.
+query = "software engineer"
+location = "Perth, WA, Australia"
+sites = ["indeed", "glassdoor"]
+results_per_site = 25
+hours_old = 168
+country_indeed = "Australia"
+
