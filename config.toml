@@ -1,9 +1,20 @@
 [search]
-# JobSpy search parameters. Set query and location to match your search.
-query = "software engineer"
-location = "Perth, WA, Australia"
+# Each title is searched in each listed location.
+titles = ["Graduate Lawyer", "Junior Lawyer", "Associate Lawyer"]
+locations = [
+  "Perth, WA, Australia",
+  "Melbourne, VIC, Australia",
+  "Sydney, NSW, Australia",
+  "Brisbane, QLD, Australia",
+]
 sites = ["indeed", "glassdoor"]
-results_per_site = 25
-hours_old = 168
+results_per_site = { indeed = 25, glassdoor = 25 }
+hours_old = 24
 country_indeed = "Australia"
+
+[initial_import]
+# Seed the backlog once on the first app launch.
+enabled = true
+# This cap is split between enabled sites for each title/location pair.
+results_per_title_location = 250
 

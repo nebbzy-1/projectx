@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -13,8 +16,23 @@ def load_search_config() -> dict:
         config = tomllib.load(config_file)
 
     search = config.get("search", {})
-    required = ("query", "location", "sites")
+    required = ("titles", "locations", "sites")
     missing = [key for key in required if not search.get(key)]
     if missing:
         raise ValueError(f"Missing required [search] settings: {', '.join(missing)}")
+    for key in ("titles", "locations", "sites"):
+        if not isinstance(search[key], list) or not search[key]:
+            raise ValueError(f"[search].{key} must be a non-empty list")
+    limits = search.get("results_per_site", 25)
+    if isinstance(limits, dict):
+        search["results_per_site"] = {
+            site: max(1, int(limits.get(site, 25))) for site in search["sites"]
+        }
+    else:
+        search["results_per_site"] = {site: max(1, int(limits)) for site in search["sites"]}
+    initial = config.get("initial_import", {})
+    search["initial_import_enabled"] = bool(initial.get("enabled", False))
+    search["initial_results_per_title_location"] = int(
+        initial.get("results_per_title_location", 250)
+    )
     return search
