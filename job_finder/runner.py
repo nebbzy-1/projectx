@@ -7,6 +7,7 @@ import sqlite3
 from typing import Callable
 
 from .database import (
+    find_job_id,
     find_unseen_jobs,
     get_metadata,
     save_latest_jobs,
@@ -15,10 +16,17 @@ from .database import (
     upsert_jobs_with_ids,
 )
 from .search import search_jobs
+from .profile import DEFAULT_CANDIDATE_PROFILE
+from .smart_filter import classify_job, ensure_jobs_classified
 
 
 INITIAL_IMPORT_KEY = "initial_import_completed_at"
 LATEST_REFRESH_KEY = "last_latest_refresh_at"
+
+
+def _assess_jobs(jobs: list[dict], config: dict) -> list[dict]:
+    profile = config.get("candidate_profile", DEFAULT_CANDIDATE_PROFILE)
+    return [{**job, **classify_job(job, profile)} for job in jobs]
 
 
 @dataclass
@@ -60,7 +68,8 @@ def run_initial_import(
             for site, quota in quotas.items():
                 try:
                     batch = search_jobs(config, title, location, quota, hours_old=None, sites=[site])
-                    new_count, existing_count = upsert_jobs(connection, batch.jobs)
+                    prepared = _assess_jobs(batch.jobs, config)
+                    new_count, existing_count = upsert_jobs(connection, prepared)
                     found += len(batch.jobs)
                     added += new_count
                     existing += existing_count
@@ -91,7 +100,8 @@ def run_daily_search(connection: sqlite3.Connection, config: dict) -> RunSummary
                         hours_old=int(config.get("hours_old", 24)),
                         sites=[site],
                     )
-                    new_count, existing_count = upsert_jobs(connection, batch.jobs)
+                    prepared = _assess_jobs(batch.jobs, config)
+                    new_count, existing_count = upsert_jobs(connection, prepared)
                     found += len(batch.jobs)
                     added += new_count
                     existing += existing_count
@@ -105,6 +115,10 @@ def run_daily_search(connection: sqlite3.Connection, config: dict) -> RunSummary
 
 
 def run_search(connection: sqlite3.Connection, config: dict) -> RunSummary:
+    ensure_jobs_classified(
+        connection,
+        config.get("candidate_profile", DEFAULT_CANDIDATE_PROFILE),
+    )
     if config.get("initial_import_enabled") and not get_metadata(connection, INITIAL_IMPORT_KEY):
         return run_initial_import(connection, config)
     return run_daily_search(connection, config)
@@ -148,11 +162,18 @@ def preview_latest_refresh(connection: sqlite3.Connection, config: dict) -> Late
                 except Exception as error:
                     errors.append(f"{site} / {title} / {location}: {error}")
     unseen = find_unseen_jobs(connection, candidates) if not errors else []
+    unseen = _assess_jobs(unseen, config)
     return LatestPreview(unseen, errors, hours_old)
 
 
-def commit_latest_refresh(connection: sqlite3.Connection, jobs: list[dict]) -> int:
-    _, _, job_ids = upsert_jobs_with_ids(connection, jobs)
+def commit_latest_refresh(
+    connection: sqlite3.Connection,
+    jobs: list[dict],
+    latest_jobs: list[dict] | None = None,
+) -> int:
+    upsert_jobs_with_ids(connection, jobs)
+    visible_jobs = jobs if latest_jobs is None else latest_jobs
+    job_ids = [job_id for job in visible_jobs if (job_id := find_job_id(connection, job)) is not None]
     refreshed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     save_latest_jobs(connection, job_ids, refreshed_at)
     return len(job_ids)

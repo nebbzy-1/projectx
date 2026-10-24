@@ -32,7 +32,10 @@ def connect(path: Path) -> sqlite3.Connection:
             first_seen TEXT NOT NULL,
             last_seen TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'new',
-            notes TEXT NOT NULL DEFAULT ''
+            notes TEXT NOT NULL DEFAULT '',
+            fit_status TEXT NOT NULL DEFAULT 'review',
+            fit_reason TEXT NOT NULL DEFAULT '',
+            fit_override INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -40,6 +43,12 @@ def connect(path: Path) -> sqlite3.Connection:
     needs_match_key_backfill = "match_key" not in columns
     if needs_match_key_backfill:
         connection.execute("ALTER TABLE jobs ADD COLUMN match_key TEXT")
+    if "fit_status" not in columns:
+        connection.execute("ALTER TABLE jobs ADD COLUMN fit_status TEXT NOT NULL DEFAULT 'review'")
+    if "fit_reason" not in columns:
+        connection.execute("ALTER TABLE jobs ADD COLUMN fit_reason TEXT NOT NULL DEFAULT ''")
+    if "fit_override" not in columns:
+        connection.execute("ALTER TABLE jobs ADD COLUMN fit_override INTEGER NOT NULL DEFAULT 0")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS job_sources (
@@ -176,6 +185,11 @@ def _known_job(connection: sqlite3.Connection, job: dict) -> sqlite3.Row | None:
     return connection.execute("SELECT id FROM jobs WHERE fingerprint = ?", (fingerprint,)).fetchone()
 
 
+def find_job_id(connection: sqlite3.Connection, job: dict) -> int | None:
+    row = _known_job(connection, job)
+    return int(row["id"]) if row else None
+
+
 def find_unseen_jobs(connection: sqlite3.Connection, jobs: list[dict]) -> list[dict]:
     """Return new, deduplicated candidates without writing them to the database."""
     unseen: list[dict] = []
@@ -203,8 +217,8 @@ def upsert_jobs_with_ids(connection: sqlite3.Connection, jobs: list[dict]) -> tu
             connection.execute(
                 """INSERT INTO jobs
                 (fingerprint, match_key, title, company, location, source, url, description,
-                 date_posted, first_seen, last_seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 date_posted, first_seen, last_seen, fit_status, fit_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     fingerprint,
                     match_key or None,
@@ -217,6 +231,8 @@ def upsert_jobs_with_ids(connection: sqlite3.Connection, jobs: list[dict]) -> tu
                     str(job.get("date_posted") or "") or None,
                     now,
                     now,
+                    str(job.get("fit_status") or "review"),
+                    str(job.get("fit_reason") or ""),
                 ),
             )
             job_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -225,10 +241,20 @@ def upsert_jobs_with_ids(connection: sqlite3.Connection, jobs: list[dict]) -> tu
         else:
             job_id = existing["id"]
             connection.execute(
-                """UPDATE jobs SET last_seen = ?, description = COALESCE(description, ?),
-                   date_posted = COALESCE(date_posted, ?), match_key = COALESCE(match_key, ?)
+                """UPDATE jobs SET last_seen = ?, description = COALESCE(?, description),
+                   date_posted = COALESCE(date_posted, ?), match_key = COALESCE(match_key, ?),
+                   fit_status = CASE WHEN fit_override = 1 THEN fit_status ELSE ? END,
+                   fit_reason = CASE WHEN fit_override = 1 THEN fit_reason ELSE ? END
                    WHERE id = ?""",
-                (now, job.get("description"), str(job.get("date_posted") or "") or None, match_key or None, job_id),
+                (
+                    now,
+                    job.get("description"),
+                    str(job.get("date_posted") or "") or None,
+                    match_key or None,
+                    str(job.get("fit_status") or "review"),
+                    str(job.get("fit_reason") or ""),
+                    job_id,
+                ),
             )
         if raw_url:
             connection.execute(
@@ -261,7 +287,11 @@ def list_job_sources(connection: sqlite3.Connection, job_id: int) -> list[sqlite
     ).fetchall()
 
 
-def _tab_clauses(tab: str, location: str | None, query: str | None) -> tuple[str, list[str], str, str]:
+def _tab_clauses(
+    tab: str,
+    location: str | None,
+    query: str | None,
+) -> tuple[str, list[str], str, str]:
     clauses: list[str] = []
     values: list[str] = []
     if location:
@@ -273,7 +303,12 @@ def _tab_clauses(tab: str, location: str | None, query: str | None) -> tuple[str
         clauses.append("(j.title LIKE ? OR j.company LIKE ? OR j.location LIKE ?)")
         values.extend((pattern, pattern, pattern))
     if tab == "backlog":
-        clauses.append("j.status IN ('new', 'saved')")
+        clauses.extend(("j.status IN ('new', 'saved')", "COALESCE(j.fit_status, 'review') != 'skip'"))
+        from_clause = "jobs j"
+        order = "j.first_seen DESC"
+    elif tab == "deleted":
+        # Deleted is the raw search archive: keep every fetched listing visible
+        # here, including rows routed to Backlog or Applied after filtering.
         from_clause = "jobs j"
         order = "j.first_seen DESC"
     elif tab == "applied":
@@ -283,6 +318,8 @@ def _tab_clauses(tab: str, location: str | None, query: str | None) -> tuple[str
     else:
         from_clause = "latest_jobs l JOIN jobs j ON j.id = l.job_id"
         order = "l.added_at DESC, l.id DESC"
+    if tab == "latest":
+        clauses.append("COALESCE(j.fit_status, 'review') != 'skip'")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return where, values, from_clause, order
 
@@ -297,8 +334,8 @@ def _tab_query(
 ) -> list[sqlite3.Row]:
     where, values, from_clause, order = _tab_clauses(tab, location, query)
     return connection.execute(
-        f"SELECT j.id, j.title, j.company, j.location, j.source, j.url, j.date_posted, "
-        f"j.first_seen, j.last_seen, j.status, j.notes, "
+        f"SELECT j.id, j.title, j.company, j.location, j.source, j.url, j.description, j.date_posted, "
+        f"j.first_seen, j.last_seen, j.status, j.notes, j.fit_status, j.fit_reason, j.fit_override, "
         f"{'l.is_new' if tab == 'latest' else '0'} AS latest_new "
         f"FROM {from_clause} {where} ORDER BY {order} LIMIT ? OFFSET ?",
         [*values, limit, offset],
@@ -313,9 +350,16 @@ def list_tab_jobs(
     limit: int = 100,
     offset: int = 0,
 ) -> list[sqlite3.Row]:
-    if tab not in {"applied", "backlog", "latest"}:
+    if tab not in {"applied", "backlog", "latest", "deleted"}:
         raise ValueError(f"Unknown job tab: {tab}")
-    return _tab_query(connection, tab, location, query, min(max(int(limit), 1), 200), max(int(offset), 0))
+    return _tab_query(
+        connection,
+        tab,
+        location,
+        query,
+        min(max(int(limit), 1), 200),
+        max(int(offset), 0),
+    )
 
 
 def count_tab_jobs(
@@ -324,7 +368,7 @@ def count_tab_jobs(
     location: str | None = None,
     query: str | None = None,
 ) -> int:
-    if tab not in {"applied", "backlog", "latest"}:
+    if tab not in {"applied", "backlog", "latest", "deleted"}:
         raise ValueError(f"Unknown job tab: {tab}")
     where, values, from_clause, _ = _tab_clauses(tab, location, query)
     return int(
@@ -365,5 +409,15 @@ def set_status(connection: sqlite3.Connection, job_id: int, status: str) -> bool
 
 def set_note(connection: sqlite3.Connection, job_id: int, note: str) -> bool:
     result = connection.execute("UPDATE jobs SET notes = ? WHERE id = ?", (note, job_id))
+    connection.commit()
+    return result.rowcount > 0
+
+
+def restore_job_to_backlog(connection: sqlite3.Connection, job_id: int) -> bool:
+    result = connection.execute(
+        "UPDATE jobs SET fit_status = 'review', fit_reason = 'Manually restored from Deleted.', fit_override = 1 "
+        "WHERE id = ? AND fit_status = 'skip' AND status IN ('new', 'saved')",
+        (job_id,),
+    )
     connection.commit()
     return result.rowcount > 0

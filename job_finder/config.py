@@ -6,6 +6,8 @@ except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 from pathlib import Path
 
+from .profile import load_candidate_profile
+
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.toml"
 DATABASE_PATH = ROOT / "data" / "jobs.sqlite3"
@@ -35,4 +37,5 @@ def load_search_config() -> dict:
     search["initial_results_per_title_location"] = int(
         initial.get("results_per_title_location", 250)
     )
+    search["candidate_profile"] = load_candidate_profile()
     return search

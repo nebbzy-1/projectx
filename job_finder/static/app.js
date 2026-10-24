@@ -37,7 +37,9 @@
 
     if (state.task === "confirmation" && state.preview_token && !handledPreviews.has(state.preview_token)) {
       handledPreviews.add(state.preview_token);
-      const prompt = `This refresh found ${state.preview_count} new jobs. Latest will contain ${state.total_after} jobs.\n\n` +
+      const skipped = Number(state.skipped_count || 0);
+      const hiddenNote = skipped ? `\n\n${skipped} low-fit jobs will be marked as set aside in the Deleted archive.` : "";
+      const prompt = `This refresh found ${state.preview_count} jobs to show. Latest will contain ${state.total_after} jobs.${hiddenNote}\n\n` +
         `Latest keeps up to 26. If it goes over 26, the oldest jobs are removed from Latest only; they stay in Backlog. Continue?`;
       const endpoint = window.confirm(prompt) ? "/api/latest/confirm" : "/api/latest/cancel";
       fetch(endpoint, {
@@ -84,6 +86,12 @@
     });
   }
   if (location && filters) location.addEventListener("change", () => filters.requestSubmit());
+  document.querySelectorAll(".job-description").forEach((description) => {
+    const card = description.closest(".job-card");
+    const syncOpenState = () => card?.classList.toggle("description-open", description.open);
+    description.addEventListener("toggle", syncOpenState);
+    syncOpenState();
+  });
 
   poll();
   window.setInterval(poll, 1400);

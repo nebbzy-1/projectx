@@ -4,6 +4,7 @@ import secrets
 import threading
 from typing import Any
 import webbrowser
+from html.parser import HTMLParser
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
@@ -17,6 +18,7 @@ from .database import (
     latest_job_count,
     list_job_sources,
     list_tab_jobs,
+    restore_job_to_backlog,
     set_note,
     set_status,
 )
@@ -27,7 +29,49 @@ from .runner import (
     preview_latest_refresh,
     run_initial_import,
 )
+from .profile import load_candidate_profile, normalize_candidate_profile, save_candidate_profile
 from .scheduler import remove_schedule
+from .smart_filter import ensure_jobs_classified, reclassify_jobs
+
+
+class _DescriptionParser(HTMLParser):
+    BLOCK_TAGS = {"br", "div", "li", "ol", "p", "section", "ul"}
+    HIDDEN_TAGS = {"script", "style"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.hidden_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag.casefold() in self.HIDDEN_TAGS:
+            self.hidden_depth += 1
+            return
+        if self.hidden_depth:
+            return
+        if tag.casefold() in self.BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() in self.HIDDEN_TAGS and self.hidden_depth:
+            self.hidden_depth -= 1
+            return
+        if self.hidden_depth:
+            return
+        if tag.casefold() in self.BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self.hidden_depth:
+            self.parts.append(data)
+
+
+def _plain_description(value: object) -> str:
+    parser = _DescriptionParser()
+    parser.feed(str(value or ""))
+    parser.close()
+    lines = [line.strip() for line in "".join(parser.parts).splitlines()]
+    return "\n".join(line for line in lines if line)
 
 
 class SearchController:
@@ -37,12 +81,15 @@ class SearchController:
 
     def __init__(self, config: dict, database_path=DATABASE_PATH):
         self.config = config
+        self.config.setdefault("candidate_profile", load_candidate_profile())
         self.database_path = database_path
         self._lock = threading.RLock()
         self._preview: LatestPreview | None = None
+        self._preview_latest_jobs: list[dict] = []
         self._preview_token: str | None = None
         connection = connect(self.database_path)
         try:
+            ensure_jobs_classified(connection, self.config.get("candidate_profile", {}))
             self._seeded = get_metadata(connection, INITIAL_IMPORT_KEY) is not None
         finally:
             connection.close()
@@ -71,10 +118,10 @@ class SearchController:
             return state
 
     def start_initial_import(self) -> bool:
-        if not self.config["initial_import_enabled"] or self._seeded:
+        if not self.config["initial_import_enabled"]:
             return False
         with self._lock:
-            if self._state["task"] in self.ACTIVE_TASKS:
+            if self._state["task"] in self.ACTIVE_TASKS or self._seeded:
                 return False
             self._state.update(
                 task="initial_import",
@@ -95,16 +142,18 @@ class SearchController:
                 self.config,
                 progress=self._update_progress,
             )
+            backlog_count = count_tab_jobs(connection, "backlog")
+            deleted_count = count_tab_jobs(connection, "deleted")
         except Exception as error:
             self._finish_error(f"Initial import failed: {error}")
         else:
             with self._lock:
                 self._seeded = not summary.errors
                 message = (
-                    f"Initial import finished with {len(summary.errors)} search errors. "
-                    "Some jobs were saved; retry to finish the import."
+                    f"Partial import: {backlog_count} jobs in Backlog; {deleted_count} raw listings in Deleted. "
+                    "Some searches failed; retry to finish the import."
                     if summary.errors
-                    else f"Backlog ready: {summary.added} jobs added from {summary.found} listings."
+                    else f"Initial import complete: {backlog_count} jobs in Backlog; {deleted_count} raw listings saved in Deleted."
                 )
                 self._state.update(
                     task="error" if summary.errors else "done",
@@ -124,11 +173,13 @@ class SearchController:
                 self._state["message"] = f"Initial import: {done} of {total} searches complete."
 
     def start_latest_refresh(self) -> bool:
-        state = self.snapshot()
-        if state["busy"] or state["can_retry_seed"]:
-            return False
         with self._lock:
+            if self._state["task"] in self.ACTIVE_TASKS:
+                return False
+            if self.config["initial_import_enabled"] and not self._seeded:
+                return False
             self._preview = None
+            self._preview_latest_jobs = []
             self._preview_token = None
             self._state.update(
                 task="latest_search",
@@ -153,12 +204,15 @@ class SearchController:
                 )
                 return
 
+            visible_jobs = [job for job in preview.jobs if job.get("fit_status") != "skip"]
+            skipped_count = len(preview.jobs) - len(visible_jobs)
             current_count = latest_job_count(connection)
-            total_after = current_count + len(preview.jobs)
+            total_after = current_count + len(visible_jobs)
             if total_after > LATEST_LIMIT - 1:
                 token = secrets.token_urlsafe(24)
                 with self._lock:
                     self._preview = preview
+                    self._preview_latest_jobs = visible_jobs
                     self._preview_token = token
                     self._state.update(
                         task="confirmation",
@@ -166,15 +220,19 @@ class SearchController:
                         error=False,
                         progress=None,
                         preview_token=token,
-                        preview_count=len(preview.jobs),
+                        preview_count=len(visible_jobs),
+                        skipped_count=skipped_count,
                         total_after=total_after,
                         requires_confirmation=True,
                         event_id=self._state["event_id"] + 1,
                     )
                 return
 
-            added = commit_latest_refresh(connection, preview.jobs)
-            self._finish_success(f"Refresh complete: {added} new jobs added.")
+            added = commit_latest_refresh(connection, preview.jobs, latest_jobs=visible_jobs)
+            message = f"Refresh complete: {added} jobs added to Latest."
+            if skipped_count:
+                message += f" {skipped_count} low-fit jobs were saved in Deleted."
+            self._finish_success(message)
         except Exception as error:
             self._finish_error(f"Refresh failed; nothing was added: {error}")
         finally:
@@ -190,18 +248,24 @@ class SearchController:
             ):
                 return False, "That refresh preview has expired. Start a new refresh."
             preview = self._preview
+            visible_jobs = self._preview_latest_jobs
+            skipped_count = int(self._state.get("skipped_count", 0))
             self._preview = None
+            self._preview_latest_jobs = []
             self._preview_token = None
             self._state.update(task="committing", message="Saving the confirmed refresh…")
         connection = connect(self.database_path)
         try:
-            added = commit_latest_refresh(connection, preview.jobs)
+            added = commit_latest_refresh(connection, preview.jobs, latest_jobs=visible_jobs)
         except Exception as error:
             self._finish_error(f"Refresh could not be saved: {error}")
             return False, str(error)
         finally:
             connection.close()
-        self._finish_success(f"Refresh complete: {added} new jobs added.")
+        message = f"Refresh complete: {added} jobs added to Latest."
+        if skipped_count:
+            message += f" {skipped_count} low-fit jobs were saved in Deleted."
+        self._finish_success(message)
         return True, "Refresh saved."
 
     def cancel_latest_refresh(self, token: str) -> tuple[bool, str]:
@@ -213,6 +277,7 @@ class SearchController:
             ):
                 return False, "That refresh preview has expired."
             self._preview = None
+            self._preview_latest_jobs = []
             self._preview_token = None
             self._state.update(
                 task="idle",
@@ -223,6 +288,30 @@ class SearchController:
                 event_id=self._state["event_id"] + 1,
             )
             return True, "Refresh cancelled."
+
+    def update_candidate_profile(self, values: dict[str, Any]) -> tuple[bool, int]:
+        profile = normalize_candidate_profile(values)
+        with self._lock:
+            if self._state["task"] in self.ACTIVE_TASKS:
+                return False, 0
+            profile = save_candidate_profile(profile)
+            self.config["candidate_profile"] = profile
+            connection = connect(self.database_path)
+            try:
+                reclassified = reclassify_jobs(connection, profile, reset_overrides=True)
+            finally:
+                connection.close()
+            self._state.update(
+                task="done",
+                message=f"Smart filter profile saved. Rechecked {reclassified} saved jobs.",
+                error=False,
+                progress=None,
+                details=[],
+                preview_token=None,
+                requires_confirmation=False,
+                event_id=self._state["event_id"] + 1,
+            )
+            return True, reclassified
 
     def _finish_success(self, message: str) -> None:
         with self._lock:
@@ -261,7 +350,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
     @app.get("/")
     def index():
         tab = request.args.get("tab", "backlog").casefold()
-        if tab not in {"applied", "backlog", "latest"}:
+        if tab not in {"applied", "backlog", "latest", "deleted"}:
             tab = "backlog"
         location = request.args.get("location", "")
         valid_locations = {"", *search_config["locations"]}
@@ -273,7 +362,12 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
 
         connection = connect(database_path)
         try:
-            total = count_tab_jobs(connection, tab, location or None, query or None)
+            total = count_tab_jobs(
+                connection,
+                tab,
+                location or None,
+                query or None,
+            )
             rows = list_tab_jobs(
                 connection,
                 tab,
@@ -286,11 +380,18 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             for row in rows:
                 job = dict(row)
                 job["latest_new"] = bool(job["latest_new"])
+                job["description_text"] = _plain_description(job.get("description"))
+                if job["status"] in {"applied", "interviewing", "rejected", "closed"}:
+                    job["archive_route"] = f"Application · {job['status'].replace('_', ' ').title()}"
+                elif job["fit_status"] == "skip":
+                    job["archive_route"] = "Set aside · low fit"
+                else:
+                    job["archive_route"] = "In Backlog"
                 job["sources"] = [dict(source) for source in list_job_sources(connection, job["id"])]
                 jobs.append(job)
             counts = {
                 name: count_tab_jobs(connection, name)
-                for name in ("applied", "backlog", "latest")
+                for name in ("latest", "applied", "backlog", "deleted")
             }
         finally:
             connection.close()
@@ -301,7 +402,13 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             jobs=jobs,
             total=total,
             counts=counts,
-            tab_labels={"latest": "Latest", "applied": "Applied", "backlog": "Backlog"},
+            candidate_profile=controller.config.get("candidate_profile", {}),
+            tab_labels={
+                "latest": "Latest",
+                "applied": "Applied",
+                "backlog": "Backlog",
+                "deleted": "Deleted",
+            },
             page=page,
             page_size=page_size,
             location=location,
@@ -347,6 +454,35 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             flash("Initial import started.", "success")
         else:
             flash("The initial import is already complete or a search is running.", "error")
+        return redirect(url_for("index", tab="backlog"))
+
+    @app.post("/jobs/<int:job_id>/restore")
+    def restore_job(job_id: int):
+        connection = connect(database_path)
+        try:
+            restored = restore_job_to_backlog(connection, job_id)
+        finally:
+            connection.close()
+        flash("Restored to Backlog." if restored else "That job could not be restored.", "success" if restored else "error")
+        return redirect(url_for("index", tab="deleted"))
+
+    @app.post("/profile")
+    def update_profile():
+        try:
+            updated, reclassified = controller.update_candidate_profile(
+                {
+                    "enabled": request.form.get("enabled") == "on",
+                    "circumstances": request.form.get("circumstances", ""),
+                    "max_required_pqe": request.form.get("max_required_pqe", "1"),
+                }
+            )
+        except (ValueError, OSError) as error:
+            flash(str(error), "error")
+        else:
+            if updated:
+                flash(f"Smart filter saved. Rechecked {reclassified} jobs.", "success")
+            else:
+                flash("Wait for the current search to finish before changing the smart filter.", "error")
         return redirect(url_for("index", tab="backlog"))
 
     @app.get("/api/search-state")
