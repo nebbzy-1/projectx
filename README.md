@@ -22,7 +22,7 @@ The start command opens Job Finder at `http://127.0.0.1:8765`. Leave the termina
 - **Backlog** holds new and saved roles.
 - **Deleted** is the raw JobSpy archive after duplicate merging. Every unique listing stays here, including roles also routed to Backlog or Applied. Each card shows its current route; low-fit roles can be restored to Backlog.
 - Filter any list by location or search text. Update a job's status and notes on its card.
-- Job cards stay within the page width. Status, notes, and Save controls sit together; **View job description** expands across the full card below them.
+- Job cards stay within the page width. Status, notes, and Save controls sit together; **View job description** expands across the full card below them. Dropdown indicators use the same small, rounded chevron style.
 - The left navigation is ordered **Latest**, **Applied**, **Backlog**, **Deleted**. Latest keeps up to 26 items. If a refresh would put more than 25 in the list, the app asks before saving. Older items removed from Latest remain in Backlog and SQLite.
 
 ## Smart fit filter

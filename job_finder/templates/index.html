@@ -80,7 +80,7 @@
           <span class="filter-icon">✦</span>
           <span class="smart-filter-heading"><strong>Smart fit filter</strong><small>Screen roles against your circumstances</small></span>
           <span class="local-tag">Saved on this Mac</span>
-          <span class="filter-chevron" aria-hidden="true">⌄</span>
+          <span class="dropdown-chevron" aria-hidden="true"><svg viewBox="0 0 12 12"><path d="m2.5 4 3.5 3.5L9.5 4" /></svg></span>
         </summary>
         <div class="smart-filter-content">
           <form class="profile-form" action="{{ url_for('update_profile') }}" method="post">
@@ -160,7 +160,7 @@
           </div>
           {% if job.description_text %}
           <details class="job-description">
-            <summary><span>View job description</span><span class="description-chevron" aria-hidden="true">⌄</span></summary>
+            <summary><span>View job description</span><span class="dropdown-chevron" aria-hidden="true"><svg viewBox="0 0 12 12"><path d="m2.5 4 3.5 3.5L9.5 4" /></svg></span></summary>
             <div class="description-copy">{{ job.description_text }}</div>
           </details>
           {% endif %}
