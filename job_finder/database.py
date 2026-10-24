@@ -68,6 +68,17 @@ def connect(path: Path) -> sqlite3.Connection:
         )"""
     )
     connection.execute(
+        """CREATE TABLE IF NOT EXISTS gmail_imported_messages (
+            message_id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            subject TEXT NOT NULL DEFAULT '',
+            imported_at TEXT NOT NULL,
+            jobs_found INTEGER NOT NULL DEFAULT 0,
+            trashed_at TEXT
+        )"""
+    )
+    connection.execute(
         """CREATE TABLE IF NOT EXISTS latest_jobs (
             id INTEGER PRIMARY KEY,
             job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
@@ -381,9 +392,10 @@ def latest_job_count(connection: sqlite3.Connection) -> int:
 
 
 def clear_job_database(connection: sqlite3.Connection) -> None:
-    """Clear saved jobs, sources, Latest entries, and search metadata; keep schema."""
+    """Clear jobs and local import history while keeping tables and the profile file."""
     connection.execute("DELETE FROM latest_jobs")
     connection.execute("DELETE FROM jobs")
+    connection.execute("DELETE FROM gmail_imported_messages")
     connection.execute("DELETE FROM app_metadata")
     connection.commit()
 

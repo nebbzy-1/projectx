@@ -131,15 +131,15 @@
     </div>
 
     <section aria-labelledby="pipeline-title">
-      <h2 id="pipeline-title">How the app could work</h2>
-      <p class="section-copy">The SEEK email integration is paused for now. The diagram keeps its planned place in the flow for context.</p>
+      <h2 id="pipeline-title">How the app works</h2>
+      <p class="section-copy">Indeed and Glassdoor are searched with JobSpy. After Gmail is configured, labelled SEEK alerts can be imported manually into the same saved job pool.</p>
       <div class="flow-shell">
         <div class="flow">
           <article class="card" data-layer="sources">
             <h3><span class="step">1</span>Job sources</h3>
             <div class="source"><strong>Indeed</strong><small>Search by role keywords and location</small></div>
             <div class="source"><strong>Glassdoor</strong><small>Search by role keywords and location</small></div>
-            <div class="source gmail"><span class="tag">Paused</span><strong>SEEK alert emails</strong><small>Future input via a dedicated Gmail label</small></div>
+            <div class="source gmail"><span class="tag">Manual sync</span><strong>SEEK alert emails</strong><small>Import messages with the Gmail label SEEK</small></div>
           </article>
           <div class="arrow" aria-hidden="true">→</div>
           <article class="card filter-card" data-layer="filters">
@@ -195,7 +195,7 @@
       </article>
     </section>
 
-    <div class="note"><strong>Current build</strong><span>The repo currently has a basic command-line Python app using JobSpy for Indeed and Glassdoor. This page is a high-level direction, not a claim that the full pipeline or UI already exists. SEEK/Gmail work is explicitly paused.</span></div>
+    <div class="note"><strong>Current build</strong><span>The repo has a local Flask web app with SQLite storage, a local smart-fit filter, JobSpy search for Indeed and Glassdoor, and optional manual SEEK alert import through Gmail OAuth. Gmail setup and authorization are required before that source can be used. This page is a high-level map, not a report of live Gmail connection status.</span></div>
     <footer>Concept map for the Job Finder project · Static page · No data is collected by this page.</footer>
   </main>
   <script>

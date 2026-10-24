@@ -37,5 +37,9 @@ def load_search_config() -> dict:
     search["initial_results_per_title_location"] = int(
         initial.get("results_per_title_location", 250)
     )
+    gmail = config.get("gmail", {})
+    search["gmail_query"] = str(gmail.get("query", "label:SEEK")).strip() or "label:SEEK"
+    search["gmail_max_messages"] = max(1, min(int(gmail.get("max_messages", 250)), 1000))
+    search["gmail_stale_after_days"] = max(1, int(gmail.get("stale_after_days", 90)))
     search["candidate_profile"] = load_candidate_profile()
     return search

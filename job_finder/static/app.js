@@ -14,6 +14,7 @@
   const refreshButton = document.getElementById("refreshButton");
   const resetButtons = document.querySelectorAll(".reset-option");
   const backlogRefreshButton = document.getElementById("backlogRefreshButton");
+  const gmailButtons = document.querySelectorAll(".gmail-actions button");
 
   function updateStatus(state) {
     statusBox.dataset.task = state.task;
@@ -38,6 +39,7 @@
     if (refreshButton) refreshButton.disabled = Boolean(state.busy || state.can_retry_seed);
     resetButtons.forEach((button) => { button.disabled = Boolean(state.busy); });
     if (backlogRefreshButton) backlogRefreshButton.disabled = Boolean(state.busy);
+    gmailButtons.forEach((button) => { button.disabled = Boolean(state.busy); });
 
     if (state.task === "confirmation" && state.preview_token && !handledPreviews.has(state.preview_token)) {
       handledPreviews.add(state.preview_token);

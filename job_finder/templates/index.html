@@ -44,7 +44,7 @@
             {% if tab == 'applied' %}Keep track of applications and follow-ups.
             {% elif tab == 'latest' %}New matching roles from your latest manual search.
             {% elif tab == 'deleted' %}Raw JobSpy archive. Every unique listing stays here after duplicate merging, including roles routed to Backlog or set aside as low fit.
-            {% else %}Your saved pool of matching roles, ready to review. Refresh checks saved Indeed and Glassdoor listings and removes only confirmed expired jobs.{% endif %}
+            {% else %}Your saved pool of matching roles, ready to review. Refresh checks saved job-board listings and removes only confirmed expired jobs.{% endif %}
           </p>
         </div>
         {% if tab == 'latest' %}
@@ -91,6 +91,33 @@
       </section>
 
       {% if tab == 'backlog' %}
+      <details class="smart-filter-panel gmail-panel">
+        <summary>
+          <span class="filter-icon">✉</span>
+          <span class="smart-filter-heading"><strong>SEEK alerts from Gmail</strong><small>Import labelled alerts into your job lists</small></span>
+          <span class="local-tag">{{ 'Connected' if gmail_connected else 'Setup needed' if gmail_client_configured else 'OAuth setup needed' }}</span>
+          <span class="dropdown-chevron" aria-hidden="true"><svg viewBox="0 0 12 12"><path d="m2.5 4 3.5 3.5L9.5 4" /></svg></span>
+        </summary>
+        <div class="smart-filter-content gmail-content">
+          <p>Gmail search: <code>{{ gmail_query }}</code>. Only matching emails are read. Existing alert emails are included on the first sync.</p>
+          {% if not gmail_client_configured %}
+          <p class="gmail-setup-note">First add your Google OAuth client file as <code>data/gmail_oauth_client.json</code>. Setup steps are in the README.</p>
+          {% elif not gmail_connected %}
+          <a class="primary-button gmail-connect" href="{{ url_for('gmail_oauth_connect') }}">Connect Gmail</a>
+          {% else %}
+          <div class="gmail-actions">
+            <form action="{{ url_for('gmail_sync') }}" method="post">
+              <button class="primary-button" type="submit" {% if search_state.busy %}disabled{% endif %}>Sync SEEK emails</button>
+            </form>
+            <form action="{{ url_for('gmail_cleanup') }}" method="post" onsubmit="return confirm('Move imported SEEK alert emails older than {{ gmail_stale_after_days }} days to Gmail Trash? Emails that were not imported are left alone.')">
+              <button class="secondary-button" type="submit" {% if search_state.busy %}disabled{% endif %}>Trash old imported alerts</button>
+            </form>
+          </div>
+          <p class="filter-explainer">Cleanup moves only previously imported SEEK messages older than {{ gmail_stale_after_days }} days to Gmail Trash. It does not permanently delete them or touch other email.</p>
+          {% endif %}
+        </div>
+      </details>
+
       <details class="smart-filter-panel">
         <summary class="smart-filter-summary">
           <span class="filter-icon">✦</span>

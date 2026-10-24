@@ -11,6 +11,14 @@ sites = ["indeed", "glassdoor"]
 results_per_site = { indeed = 25, glassdoor = 25 }
 hours_old = 24
 country_indeed = "Australia"
+
+[gmail]
+# Add this label to SEEK alert messages in Gmail. The initial sync also imports messages already carrying it.
+query = "label:SEEK"
+max_messages = 250
+# The cleanup button only moves previously imported SEEK alerts older than this to Gmail Trash.
+stale_after_days = 90
+
 [initial_import]
 # Seed the backlog once on the first app launch.
 enabled = true

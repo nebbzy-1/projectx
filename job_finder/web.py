@@ -31,6 +31,14 @@ from .runner import (
     run_initial_import,
 )
 from .availability import remove_confirmed_expired
+from .gmail_import import (
+    GmailSetupError,
+    authorize_gmail,
+    gmail_client_configured,
+    gmail_connected,
+    sync_seek_alerts,
+    trash_stale_imported_alerts,
+)
 from .profile import load_candidate_profile, normalize_candidate_profile, save_candidate_profile
 from .scheduler import remove_schedule
 from .smart_filter import ensure_jobs_classified, reclassify_jobs
@@ -79,7 +87,10 @@ def _plain_description(value: object) -> str:
 class SearchController:
     """Runs long board searches away from Flask's request thread."""
 
-    ACTIVE_TASKS = {"initial_import", "partial_reset", "full_reset", "listing_check", "latest_search", "confirmation", "committing"}
+    ACTIVE_TASKS = {
+        "initial_import", "partial_reset", "full_reset", "listing_check",
+        "gmail_sync", "gmail_cleanup", "latest_search", "confirmation", "committing",
+    }
 
     def __init__(self, config: dict, database_path=DATABASE_PATH):
         self.config = config
@@ -432,6 +443,75 @@ class SearchController:
         finally:
             connection.close()
 
+    def start_gmail_sync(self) -> bool:
+        with self._lock:
+            if self._state["task"] in self.ACTIVE_TASKS:
+                return False
+            self._state.update(
+                task="gmail_sync",
+                message="Reading SEEK alert emails from Gmail…",
+                error=False,
+                progress=None,
+                details=[],
+                event_id=self._state["event_id"] + 1,
+            )
+        threading.Thread(target=self._run_gmail_sync, daemon=True).start()
+        return True
+
+    def _run_gmail_sync(self) -> None:
+        connection = connect(self.database_path)
+        try:
+            summary = sync_seek_alerts(connection, self.config)
+            if summary.messages_processed:
+                result = (
+                    f"read {summary.jobs_found} SEEK listing entries across "
+                    f"{summary.messages_processed} emails, added {summary.jobs_added} new jobs, "
+                    f"and matched {summary.jobs_existing} previously seen SEEK links."
+                )
+                result += (
+                    f" {summary.messages_without_jobs} emails had no readable SEEK job links;"
+                    f" {summary.messages_without_body} had no readable message body."
+                )
+            else:
+                result = "no new SEEK alert emails to process; saved listings are already in your job lists."
+            self._finish_success(
+                f"Gmail sync complete: checked {summary.messages_seen} labelled emails; {result}"
+            )
+        except Exception as error:
+            self._finish_error(f"Gmail sync failed: {error}")
+        finally:
+            connection.close()
+
+    def start_gmail_cleanup(self) -> bool:
+        with self._lock:
+            if self._state["task"] in self.ACTIVE_TASKS:
+                return False
+            self._state.update(
+                task="gmail_cleanup",
+                message="Moving old imported SEEK alert emails to Gmail Trash…",
+                error=False,
+                progress=None,
+                details=[],
+                event_id=self._state["event_id"] + 1,
+            )
+        threading.Thread(target=self._run_gmail_cleanup, daemon=True).start()
+        return True
+
+    def _run_gmail_cleanup(self) -> None:
+        connection = connect(self.database_path)
+        try:
+            removed, failed = trash_stale_imported_alerts(
+                connection, self.config.get("gmail_stale_after_days", 90)
+            )
+            message = f"Gmail cleanup complete: moved {removed} old imported SEEK emails to Trash."
+            if failed:
+                message += f" {failed} could not be moved."
+            self._finish_success(message)
+        except Exception as error:
+            self._finish_error(f"Gmail cleanup failed: {error}")
+        finally:
+            connection.close()
+
     def _finish_success(self, message: str) -> None:
         with self._lock:
             self._state.update(
@@ -536,6 +616,10 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             statuses=STATUSES,
             search_state=controller.snapshot(),
             latest_limit=LATEST_LIMIT,
+            gmail_client_configured=gmail_client_configured(),
+            gmail_connected=gmail_connected(),
+            gmail_query=search_config.get("gmail_query", "label:SEEK"),
+            gmail_stale_after_days=search_config.get("gmail_stale_after_days", 90),
         )
 
     @app.post("/jobs/<int:job_id>")
@@ -578,7 +662,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
     @app.post("/database/partial-reset")
     def partial_reset():
         if controller.start_partial_reset():
-            flash("Partial reset started: refreshing the full pool and checking saved Indeed/Glassdoor listing URLs.", "success")
+            flash("Partial reset started: refreshing the full pool and checking saved job-board listing URLs.", "success")
         else:
             flash("Wait for the current search or refresh to finish before resetting.", "error")
         return redirect(url_for("index", tab="backlog"))
@@ -594,7 +678,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
     @app.post("/backlog/refresh")
     def refresh_backlog():
         if controller.start_listing_check():
-            flash("Listing check started. Confirmed expired Indeed/Glassdoor listings will be removed; unclear results will be kept.", "success")
+            flash("Listing check started. Confirmed expired Indeed, Glassdoor, and SEEK listings will be removed; unclear results will be kept.", "success")
         else:
             flash("Wait for the current search or refresh to finish before checking listings.", "error")
         return redirect(url_for("index", tab="backlog"))
@@ -626,6 +710,41 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
                 flash(f"Smart filter saved. Rechecked {reclassified} jobs.", "success")
             else:
                 flash("Wait for the current search to finish before changing the smart filter.", "error")
+        return redirect(url_for("index", tab="backlog"))
+
+    @app.get("/gmail/oauth/connect")
+    def gmail_oauth_connect():
+        try:
+            authorize_gmail()
+        except GmailSetupError as error:
+            flash(str(error), "error")
+        except Exception as error:
+            flash(f"Could not connect Gmail: {error}", "error")
+        else:
+            flash("Gmail connected. Sync SEEK alerts to import the labelled emails.", "success")
+        return redirect(url_for("index", tab="backlog"))
+
+    @app.post("/gmail/sync")
+    def gmail_sync():
+        if not gmail_connected():
+            flash("Connect Gmail before importing SEEK alerts.", "error")
+        elif controller.start_gmail_sync():
+            flash("Gmail sync started.", "success")
+        else:
+            flash("Wait for the current search or sync to finish.", "error")
+        return redirect(url_for("index", tab="backlog"))
+
+    @app.post("/gmail/cleanup")
+    def gmail_cleanup():
+        if not gmail_connected():
+            flash("Connect Gmail before cleaning up old SEEK alerts.", "error")
+        elif controller.start_gmail_cleanup():
+            flash(
+                f"Email cleanup started. Only imported SEEK alerts older than {search_config.get('gmail_stale_after_days', 90)} days will be moved to Trash.",
+                "success",
+            )
+        else:
+            flash("Wait for the current search or sync to finish.", "error")
         return redirect(url_for("index", tab="backlog"))
 
     @app.get("/api/search-state")

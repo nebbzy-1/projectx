@@ -10,8 +10,11 @@ from .database import list_job_sources
 
 UNAVAILABLE_MARKERS = (
     "this job is no longer available",
+    "this job ad is no longer available",
     "this job is no longer accepting applications",
     "job is no longer available",
+    "job posting is no longer available",
+    "job ad has expired",
     "job has expired",
     "this job has expired",
     "no longer accepting applications",
@@ -22,13 +25,13 @@ ACTIVE_MARKERS = ("apply now", "apply on employer site", "easily apply", "easy a
 def _check_source(source: str, url: str) -> bool | None:
     """Return True if the board confirms the listing is live, False if closed, else None."""
     board = source.casefold()
-    if board not in {"indeed", "glassdoor"}:
+    if board not in {"indeed", "glassdoor", "seek"}:
         return None
     try:
         hostname = (urlsplit(url).hostname or "").casefold()
     except ValueError:
         return None
-    allowed_domains = {"indeed.com", "glassdoor.com"}
+    allowed_domains = {"indeed.com", "glassdoor.com", "seek.com.au"}
     if not any(hostname == domain or hostname.endswith(f".{domain}") for domain in allowed_domains):
         return None
     request = Request(
