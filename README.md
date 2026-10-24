@@ -21,6 +21,8 @@ The start command opens Job Finder at `http://127.0.0.1:8765`. Leave the termina
 - **Applied** tracks roles marked applied, interviewing, rejected, or closed.
 - **Backlog** holds new and saved roles.
 - **Deleted** is the raw JobSpy archive after duplicate merging. Every unique listing stays here, including roles also routed to Backlog or Applied. Each card shows its current route; low-fit roles can be restored to Backlog.
+- **Check listings** checks saved Indeed and Glassdoor URLs and removes only listings clearly confirmed expired or unavailable. If a board blocks the request or the result is unclear, the job is kept. This applies regardless of application status.
+- **Reset job search** offers a partial reset that reruns the full configured import, keeps/deduplicates existing jobs, then checks saved source URLs for expiry. Full reset clears saved jobs, notes, statuses, source links, and Latest history, then runs a fresh initial import. Both keep your smart-filter profile.
 - Filter any list by location or search text. Update a job's status and notes on its card.
 - Job cards stay within the page width. Status, notes, and Save controls sit together; **View job description** expands across the full card below them. Dropdown indicators use the same small, rounded chevron style.
 - The left navigation is ordered **Latest**, **Applied**, **Backlog**, **Deleted**. Latest keeps up to 26 items. If a refresh would put more than 25 in the list, the app asks before saving. Older items removed from Latest remain in Backlog and SQLite.
@@ -31,9 +33,13 @@ Open **Smart fit filter** at the top of Backlog to edit your circumstances and m
 
 Every unique fetched listing is saved in SQLite and remains visible in the **Deleted** raw archive; copies from multiple boards are merged into one job with source links. The smart filter routes explicit PQE requirements above your limit and senior-only titles out of **Backlog** as low fit; junior cues are marked **Likely fit**, and unclear jobs stay in Backlog as **Review**. The Deleted archive labels each row as Backlog, Applied, or set aside, and low-fit jobs can be restored. If you list practice interests in your profile, the filter compares them with the job description and flags mismatches for review. The profile is saved in the ignored local file `data/smart_profile.json`; no external AI service is used.
 
+The future AI-based ranking design is documented in [`prompts/job_fit_ranker.md`](prompts/job_fit_ranker.md), with its response contract in [`prompts/job_fit_result.schema.json`](prompts/job_fit_result.schema.json). These are design references only; the running app still uses the local rule-based filter and does not call an AI service.
+
 ## Search settings
 
 Edit `config.toml` to change the titles, locations, sources, and result limits. Defaults are Graduate Lawyer, Junior Lawyer, and Associate Lawyer in Perth, Melbourne, Sydney, and Brisbane, using Indeed and Glassdoor. The initial import requests up to 250 results per title/location pair across the enabled sites.
+
+Availability checks visit every saved Indeed and Glassdoor listing URL. A 404/410 response or a clear “no longer available” message confirms expiry; a board block, timeout, ambiguous page, unsupported source, or missing URL keeps the job. A partial reset first reruns the full configured search, deduplicates/upserts its results, then checks saved source URLs; absence from a capped search alone never deletes a job. Some sites may block checks, which means the app will retain uncertain listings.
 
 Job board results may be incomplete or blocked. LinkedIn scraping is disabled. SEEK/Gmail import, hosting, and email alerts are paused.
 
@@ -76,9 +82,9 @@ python -m job_finder note 1 "Applied on company website"
 ## AI handoff
 
 ```text
-Job Finder is a local Python job search and application tracker for Australia. Launch with `python -m job_finder start`; it starts a local Flask server and opens the browser UI. Keep the terminal open and stop the server with Ctrl+C. The first launch imports configured jobs once into SQLite and the Deleted raw archive; the fit filter routes suitable roles into Backlog. Later launches do not search automatically.
+Job Finder is a local Python job search and application tracker for Australia. Launch with `python -m job_finder start`; it starts a local Flask server and opens the browser UI. Keep the terminal open and stop the server with Ctrl+C. The first launch imports configured jobs once into SQLite and the Deleted raw archive; the fit filter routes suitable roles into Backlog. Later launches do not search automatically. The future AI ranking prompt and JSON Schema are in `prompts/job_fit_ranker.md` and `prompts/job_fit_result.schema.json`; they are design references only, not connected to the running app.
 
-The left navigation is ordered Latest, Applied, Backlog, Deleted. Every unique fetched listing is kept in SQLite and visible in Deleted as a raw archive after duplicate merging; each row shows whether it is in Backlog, Applied, or set aside as low fit. Low-fit jobs can be restored to Backlog. Job cards stay within the page width; status, notes, and Save controls sit together, and descriptions expand across the full card below. The UI also has a location dropdown and text search, manual Latest refresh, and a local smart fit filter. The filter profile is stored in ignored `data/smart_profile.json`; explicit seniority mismatches above its PQE limit are excluded from Backlog. Junior signals are marked Likely fit; unclear jobs remain Review. No external AI service is used.
+The left navigation is ordered Latest, Applied, Backlog, Deleted. Every unique fetched listing is kept in SQLite and visible in Deleted as a raw archive after duplicate merging; each row shows whether it is in Backlog, Applied, or set aside as low fit. Low-fit jobs can be restored to Backlog. Check listings and partial reset use saved Indeed/Glassdoor URLs and remove only clearly confirmed expired listings, regardless of application status; blocked or ambiguous checks keep jobs. Full reset clears saved job records and search history, then runs the initial import again. These controls preserve the separate candidate profile in ignored `data/smart_profile.json`. Job cards stay within the page width; status, notes, and Save controls sit together, and descriptions expand across the full card below. The UI also has a location dropdown and text search, manual Latest refresh, and a local smart fit filter. Explicit seniority mismatches above the profile PQE limit are excluded from Backlog. Junior signals are marked Likely fit; unclear jobs remain Review. No external AI service is used.
 
 Latest searches since the initial import and then since the last successful refresh, keeps up to 26 visible jobs, and marks the newest batch with blue dots. User confirmation appears if the refresh would put the total above 25; removed Latest items remain in Backlog and SQLite.
 
@@ -93,6 +99,7 @@ SQLite data persists across app closes. Preserve it unless the user requests a r
 - Consider an optional AI review after local screening, with an explicit privacy and cost choice.
 - Prioritisation
 - Look into free hosting once the local app flow is stable.
+- Check saved Indeed/Glassdoor listing URLs and remove only confirmed expired listings.
 
 ## Project maintenance
 

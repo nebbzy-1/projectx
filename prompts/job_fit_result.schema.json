@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Job Fit Assessment Batch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["results"],
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "job_id",
+          "score",
+          "tier",
+          "confidence",
+          "hard_blocker",
+          "summary",
+          "strengths",
+          "gaps_or_unknowns",
+          "evidence"
+        ],
+        "properties": {
+          "job_id": { "type": "string", "minLength": 1 },
+          "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "tier": {
+            "type": "string",
+            "enum": ["strong_fit", "possible_fit", "weak_fit", "insufficient_information"]
+          },
+          "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+          "hard_blocker": { "type": "boolean" },
+          "summary": { "type": "string" },
+          "strengths": {
+            "type": "array",
+            "maxItems": 3,
+            "items": { "type": "string" }
+          },
+          "gaps_or_unknowns": {
+            "type": "array",
+            "maxItems": 3,
+            "items": { "type": "string" }
+          },
+          "evidence": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["job_excerpt", "candidate_fact", "assessment"],
+              "properties": {
+                "job_excerpt": { "type": "string" },
+                "candidate_fact": { "type": "string" },
+                "assessment": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

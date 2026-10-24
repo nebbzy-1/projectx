@@ -42,7 +42,18 @@ a { color: inherit; text-decoration: none; }
 .nav-link.active { background: var(--blue-soft); color: var(--blue); font-weight: 690; }
 .nav-count { min-width: 26px; padding: 3px 7px; border-radius: 20px; background: #f0f3f7; color: #7d8998; font-size: 11px; text-align: center; }
 .nav-link.active .nav-count { background: #fff; color: var(--blue); }
-.sidebar-bottom { display: flex; gap: 10px; align-items: flex-start; margin-top: auto; padding: 13px 10px 4px; border-top: 1px solid #edf0f4; }
+.reset-tools { margin-top: auto; padding: 10px 9px; border: 1px solid #e9edf3; border-radius: 9px; background: #fbfcfe; }
+.reset-tools summary { display: flex; align-items: center; gap: 8px; cursor: pointer; color: #53637a; font-size: 11px; font-weight: 650; list-style: none; }
+.reset-tools summary::-webkit-details-marker { display: none; }
+.reset-tools summary span { color: var(--blue); font-size: 15px; }
+.reset-tools p { margin: 8px 0; color: #8490a0; font-size: 9px; line-height: 1.45; }
+.reset-tools form + form { margin-top: 5px; }
+.reset-option { display: grid; width: 100%; gap: 3px; padding: 7px 8px; border: 1px solid #e8edf4; border-radius: 6px; background: #fff; color: #52627a; cursor: pointer; text-align: left; font-size: 10px; font-weight: 650; }
+.reset-option small { color: #8b96a5; font-size: 9px; font-weight: 450; line-height: 1.4; }
+.reset-option:hover:not(:disabled) { border-color: #cad8f2; background: #f7f9ff; }
+.reset-option.destructive { color: #a6534b; }
+.reset-option:disabled { cursor: wait; opacity: .55; }
+.sidebar-bottom { display: flex; gap: 10px; align-items: flex-start; margin-top: 0; padding: 13px 10px 4px; border-top: 1px solid #edf0f4; }
 .local-indicator { flex: 0 0 8px; width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: #36aa7d; box-shadow: 0 0 0 3px #e5f6ef; }
 .sidebar-bottom strong, .sidebar-bottom small { display: block; }
 .sidebar-bottom strong { font-size: 11px; font-weight: 650; }
@@ -175,7 +186,7 @@ h1 { margin: 0; font-size: 28px; letter-spacing: -.8px; line-height: 1.2; }
   .sidebar { position: sticky; z-index: 3; top: 0; width: 100%; height: auto; padding: 11px 14px 9px; border-right: 0; border-bottom: 1px solid var(--line); }
   .brand { padding: 0 2px 10px; font-size: 15px; }
   .brand-mark { width: 27px; height: 27px; border-radius: 8px; }
-  .side-label, .sidebar-bottom { display: none; }
+  .side-label, .sidebar-bottom, .reset-tools { display: none; }
   .main-nav { display: flex; gap: 5px; overflow-x: auto; }
   .nav-link { flex: 1 0 auto; justify-content: center; gap: 8px; min-height: 35px; padding: 0 10px; font-size: 11px; }
   .nav-count { min-width: 21px; padding: 2px 5px; font-size: 10px; }

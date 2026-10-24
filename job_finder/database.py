@@ -380,6 +380,14 @@ def latest_job_count(connection: sqlite3.Connection) -> int:
     return int(connection.execute("SELECT COUNT(*) FROM latest_jobs").fetchone()[0])
 
 
+def clear_job_database(connection: sqlite3.Connection) -> None:
+    """Clear saved jobs, sources, Latest entries, and search metadata; keep schema."""
+    connection.execute("DELETE FROM latest_jobs")
+    connection.execute("DELETE FROM jobs")
+    connection.execute("DELETE FROM app_metadata")
+    connection.commit()
+
+
 def save_latest_jobs(connection: sqlite3.Connection, job_ids: list[int], refreshed_at: str) -> None:
     connection.execute("UPDATE latest_jobs SET is_new = 0")
     for job_id in job_ids:

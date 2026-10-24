@@ -14,6 +14,7 @@ from .database import (
     STATUSES,
     connect,
     count_tab_jobs,
+    clear_job_database,
     get_metadata,
     latest_job_count,
     list_job_sources,
@@ -29,6 +30,7 @@ from .runner import (
     preview_latest_refresh,
     run_initial_import,
 )
+from .availability import remove_confirmed_expired
 from .profile import load_candidate_profile, normalize_candidate_profile, save_candidate_profile
 from .scheduler import remove_schedule
 from .smart_filter import ensure_jobs_classified, reclassify_jobs
@@ -77,7 +79,7 @@ def _plain_description(value: object) -> str:
 class SearchController:
     """Runs long board searches away from Flask's request thread."""
 
-    ACTIVE_TASKS = {"initial_import", "latest_search", "confirmation", "committing"}
+    ACTIVE_TASKS = {"initial_import", "partial_reset", "full_reset", "listing_check", "latest_search", "confirmation", "committing"}
 
     def __init__(self, config: dict, database_path=DATABASE_PATH):
         self.config = config
@@ -134,6 +136,95 @@ class SearchController:
         threading.Thread(target=self._run_initial_import, daemon=True).start()
         return True
 
+    def start_partial_reset(self) -> bool:
+        with self._lock:
+            if self._state["task"] in self.ACTIVE_TASKS:
+                return False
+            self._state.update(
+                task="partial_reset",
+                message="Refreshing the full job pool and checking listings that were not returned…",
+                error=False,
+                progress={"done": 0, "total": 0, "label": "Preparing searches"},
+                details=[],
+                event_id=self._state["event_id"] + 1,
+            )
+        threading.Thread(target=self._run_partial_reset, daemon=True).start()
+        return True
+
+    def _run_partial_reset(self) -> None:
+        connection = connect(self.database_path)
+        try:
+            summary = run_initial_import(connection, self.config, progress=self._update_progress)
+            removed = uncertain = 0
+            if not summary.errors:
+                removed, uncertain = remove_confirmed_expired(connection)
+            self._seeded = not summary.errors
+            backlog_count = count_tab_jobs(connection, "backlog")
+            message = (
+                f"Full pool refresh complete: {summary.added} new, {summary.existing} already saved; "
+                f"{removed} confirmed expired listings removed. {backlog_count} jobs in Backlog."
+            )
+            if summary.errors:
+                message = "Partial refresh finished with search errors; no expiry checks were used to delete jobs."
+            elif uncertain:
+                message += f" {uncertain} listings could not be confirmed, so they were kept."
+            with self._lock:
+                self._state.update(
+                    task="error" if summary.errors else "done",
+                    message=message,
+                    error=bool(summary.errors),
+                    progress=None,
+                    details=summary.errors[:8],
+                    event_id=self._state["event_id"] + 1,
+                )
+        except Exception as error:
+            self._finish_error(f"Partial reset failed: {error}")
+        finally:
+            connection.close()
+
+    def start_full_reset(self) -> bool:
+        with self._lock:
+            if self._state["task"] in self.ACTIVE_TASKS:
+                return False
+            self._state.update(
+                task="full_reset",
+                message="Clearing the saved job database and starting a fresh initial search…",
+                error=False,
+                progress={"done": 0, "total": 0, "label": "Clearing saved jobs"},
+                details=[],
+                event_id=self._state["event_id"] + 1,
+            )
+            self._seeded = False
+        threading.Thread(target=self._run_full_reset, daemon=True).start()
+        return True
+
+    def _run_full_reset(self) -> None:
+        connection = connect(self.database_path)
+        try:
+            clear_job_database(connection)
+            summary = run_initial_import(connection, self.config, progress=self._update_progress)
+            self._seeded = not summary.errors
+            backlog_count = count_tab_jobs(connection, "backlog")
+            deleted_count = count_tab_jobs(connection, "deleted")
+            message = (
+                f"Full reset complete: {backlog_count} jobs in Backlog; {deleted_count} raw listings in Deleted."
+                if not summary.errors
+                else "The database was cleared and the fresh search had some errors. Retry the initial search to fill any gaps."
+            )
+            with self._lock:
+                self._state.update(
+                    task="error" if summary.errors else "done",
+                    message=message,
+                    error=bool(summary.errors),
+                    progress=None,
+                    details=summary.errors[:8],
+                    event_id=self._state["event_id"] + 1,
+                )
+        except Exception as error:
+            self._finish_error(f"Full reset failed: {error}")
+        finally:
+            connection.close()
+
     def _run_initial_import(self) -> None:
         connection = connect(self.database_path)
         try:
@@ -168,9 +259,9 @@ class SearchController:
 
     def _update_progress(self, done: int, total: int, label: str) -> None:
         with self._lock:
-            if self._state["task"] == "initial_import":
+            if self._state["task"] in {"initial_import", "partial_reset", "full_reset"}:
                 self._state["progress"] = {"done": done, "total": total, "label": label}
-                self._state["message"] = f"Initial import: {done} of {total} searches complete."
+                self._state["message"] = f"Search: {done} of {total} searches complete."
 
     def start_latest_refresh(self) -> bool:
         with self._lock:
@@ -313,6 +404,34 @@ class SearchController:
             )
             return True, reclassified
 
+    def start_listing_check(self) -> bool:
+        with self._lock:
+            if self._state["task"] in self.ACTIVE_TASKS:
+                return False
+            self._state.update(
+                task="listing_check",
+                message="Checking saved Indeed and Glassdoor listings…",
+                error=False,
+                progress=None,
+                details=[],
+                event_id=self._state["event_id"] + 1,
+            )
+        threading.Thread(target=self._run_listing_check, daemon=True).start()
+        return True
+
+    def _run_listing_check(self) -> None:
+        connection = connect(self.database_path)
+        try:
+            removed, uncertain = remove_confirmed_expired(connection)
+            message = f"Listing check complete: {removed} confirmed expired jobs removed."
+            if uncertain:
+                message += f" {uncertain} could not be confirmed and were kept."
+            self._finish_success(message)
+        except Exception as error:
+            self._finish_error(f"Listing check failed: {error}")
+        finally:
+            connection.close()
+
     def _finish_success(self, message: str) -> None:
         with self._lock:
             self._state.update(
@@ -454,6 +573,30 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             flash("Initial import started.", "success")
         else:
             flash("The initial import is already complete or a search is running.", "error")
+        return redirect(url_for("index", tab="backlog"))
+
+    @app.post("/database/partial-reset")
+    def partial_reset():
+        if controller.start_partial_reset():
+            flash("Partial reset started: refreshing the full pool and checking saved Indeed/Glassdoor listing URLs.", "success")
+        else:
+            flash("Wait for the current search or refresh to finish before resetting.", "error")
+        return redirect(url_for("index", tab="backlog"))
+
+    @app.post("/database/full-reset")
+    def full_reset():
+        if controller.start_full_reset():
+            flash("Full reset started. Saved jobs and their statuses, notes, and Latest history were cleared.", "success")
+        else:
+            flash("Wait for the current search or refresh to finish before resetting.", "error")
+        return redirect(url_for("index", tab="backlog"))
+
+    @app.post("/backlog/refresh")
+    def refresh_backlog():
+        if controller.start_listing_check():
+            flash("Listing check started. Confirmed expired Indeed/Glassdoor listings will be removed; unclear results will be kept.", "success")
+        else:
+            flash("Wait for the current search or refresh to finish before checking listings.", "error")
         return redirect(url_for("index", tab="backlog"))
 
     @app.post("/jobs/<int:job_id>/restore")

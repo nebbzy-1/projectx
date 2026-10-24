@@ -12,6 +12,8 @@
   const progressLabel = document.getElementById("progressLabel");
   const retryForm = document.getElementById("retryForm");
   const refreshButton = document.getElementById("refreshButton");
+  const resetButtons = document.querySelectorAll(".reset-option");
+  const backlogRefreshButton = document.getElementById("backlogRefreshButton");
 
   function updateStatus(state) {
     statusBox.dataset.task = state.task;
@@ -34,6 +36,8 @@
     }
     if (retryForm) retryForm.hidden = !state.can_retry_seed;
     if (refreshButton) refreshButton.disabled = Boolean(state.busy || state.can_retry_seed);
+    resetButtons.forEach((button) => { button.disabled = Boolean(state.busy); });
+    if (backlogRefreshButton) backlogRefreshButton.disabled = Boolean(state.busy);
 
     if (state.task === "confirmation" && state.preview_token && !handledPreviews.has(state.preview_token)) {
       handledPreviews.add(state.preview_token);

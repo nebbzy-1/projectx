@@ -19,6 +19,16 @@
         </a>
         {% endfor %}
       </nav>
+      <details class="reset-tools">
+        <summary><span aria-hidden="true">↻</span> Reset job search</summary>
+        <p>Refresh every configured title and location, or clear saved job data and start again.</p>
+        <form action="{{ url_for('partial_reset') }}" method="post">
+          <button class="reset-option" type="submit" {% if search_state.busy %}disabled{% endif %}>Partial reset <small>Refill pool; remove confirmed expired listings</small></button>
+        </form>
+        <form action="{{ url_for('full_reset') }}" method="post" onsubmit="return confirm('Full reset permanently clears all saved jobs, application statuses, notes, and Latest history before searching again. Continue?')">
+          <button class="reset-option destructive" type="submit" {% if search_state.busy %}disabled{% endif %}>Full reset <small>Clear saved jobs and search again</small></button>
+        </form>
+      </details>
       <div class="sidebar-bottom">
         <span class="local-indicator"></span>
         <div><strong>Saved on this Mac</strong><small>Your lists and notes stay local.</small></div>
@@ -34,13 +44,19 @@
             {% if tab == 'applied' %}Keep track of applications and follow-ups.
             {% elif tab == 'latest' %}New matching roles from your latest manual search.
             {% elif tab == 'deleted' %}Raw JobSpy archive. Every unique listing stays here after duplicate merging, including roles routed to Backlog or set aside as low fit.
-            {% else %}Your saved pool of matching roles, ready to review.{% endif %}
+            {% else %}Your saved pool of matching roles, ready to review. Refresh checks saved Indeed and Glassdoor listings and removes only confirmed expired jobs.{% endif %}
           </p>
         </div>
         {% if tab == 'latest' %}
         <form action="{{ url_for('refresh_latest') }}" method="post">
           <button class="primary-button" id="refreshButton" type="submit" {% if search_state.busy or search_state.can_retry_seed %}disabled{% endif %}>
             <span aria-hidden="true">↻</span> Refresh latest
+          </button>
+        </form>
+        {% elif tab == 'backlog' %}
+        <form action="{{ url_for('refresh_backlog') }}" method="post">
+          <button class="primary-button" id="backlogRefreshButton" type="submit" {% if search_state.busy %}disabled{% endif %}>
+            <span aria-hidden="true">↻</span> Check listings
           </button>
         </form>
         {% endif %}

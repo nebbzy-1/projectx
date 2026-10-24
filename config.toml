@@ -11,7 +11,6 @@ sites = ["indeed", "glassdoor"]
 results_per_site = { indeed = 25, glassdoor = 25 }
 hours_old = 24
 country_indeed = "Australia"
-
 [initial_import]
 # Seed the backlog once on the first app launch.
 enabled = true
