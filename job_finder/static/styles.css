@@ -161,6 +161,15 @@ h1 { margin: 0; font-size: 28px; letter-spacing: -.8px; line-height: 1.2; }
 .source-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 1px solid #edf0f5; border-radius: 6px; background: #fafbfd; color: #64738a; font-size: 10px; font-weight: 620; }
 .source-chip:hover { border-color: #d3def3; background: var(--blue-soft); color: var(--blue); }
 .source-chip span { font-size: 11px; }
+.source-group { position: relative; }
+.source-group summary { cursor: pointer; list-style: none; }
+.source-group summary::-webkit-details-marker { display: none; }
+.source-group summary::after { width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; content: ""; transform: rotate(45deg); margin: -3px 0 0 2px; transition: transform .15s; }
+.source-group[open] summary::after { transform: rotate(225deg); margin-top: 3px; }
+.source-count { display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 8px; background: #edf1f7; font-size: 9px !important; }
+.source-menu { position: absolute; z-index: 8; top: calc(100% + 5px); left: 0; display: grid; min-width: 150px; max-width: min(250px, calc(100vw - 40px)); gap: 2px; padding: 5px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 8px 22px #17233718; }
+.source-menu a { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 5px; color: #64738a; font-size: 10px; text-decoration: none; }
+.source-menu a:hover { background: var(--blue-soft); color: var(--blue); }
 .job-actions { grid-column: 2; grid-row: 1; display: grid; align-content: start; gap: 8px; min-width: 0; width: 100%; }
 .job-edit { display: grid; grid-template-columns: minmax(105px, .85fr) minmax(0, 1.3fr) auto; align-items: center; gap: 7px; min-width: 0; width: 100%; }
 .job-edit select, .job-edit input { width: 100%; min-width: 0; height: 34px; padding: 0 9px; border: 1px solid #e4e9f0; border-radius: 7px; outline: 0; background: #fff; color: #58677a; font-size: 11px; }

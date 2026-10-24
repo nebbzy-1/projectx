@@ -587,6 +587,13 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
                 else:
                     job["archive_route"] = "In Backlog"
                 job["sources"] = [dict(source) for source in list_job_sources(connection, job["id"])]
+                grouped_sources = {}
+                for source in job["sources"]:
+                    grouped_sources.setdefault(source["source"], []).append(source["url"])
+                job["source_groups"] = [
+                    {"source": name, "urls": sorted(set(urls))}
+                    for name, urls in sorted(grouped_sources.items())
+                ]
                 jobs.append(job)
             counts = {
                 name: count_tab_jobs(connection, name)

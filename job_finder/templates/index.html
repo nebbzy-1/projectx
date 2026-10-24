@@ -177,7 +177,18 @@
             <div class="fit-assessment {{ job.fit_status }}"><strong>{{ {'recommended': 'Likely fit', 'review': 'Review', 'skip': 'Low fit'}[job.fit_status] }}</strong><span>{{ job.fit_reason }}</span></div>
             {% if job.sources %}
             <div class="source-list" aria-label="Job board links">
-              {% for source in job.sources %}<a class="source-chip" href="{{ source.url }}" target="_blank" rel="noopener noreferrer">{{ source.source }} <span aria-hidden="true">↗</span></a>{% endfor %}
+              {% for group in job.source_groups %}
+                {% if group.urls|length == 1 %}
+                  <a class="source-chip" href="{{ group.urls[0] }}" target="_blank" rel="noopener noreferrer">{{ group.source }} <span aria-hidden="true">↗</span></a>
+                {% else %}
+                  <details class="source-group">
+                    <summary class="source-chip">{{ group.source }} <span class="source-count">{{ group.urls|length }}</span></summary>
+                    <div class="source-menu">
+                      {% for source_url in group.urls %}<a href="{{ source_url }}" target="_blank" rel="noopener noreferrer">{{ group.source }} listing {{ loop.index }} <span aria-hidden="true">↗</span></a>{% endfor %}
+                    </div>
+                  </details>
+                {% endif %}
+              {% endfor %}
             </div>
             {% elif job.url %}<div class="source-list"><a class="source-chip" href="{{ job.url }}" target="_blank" rel="noopener noreferrer">Open listing <span aria-hidden="true">↗</span></a></div>{% endif %}
           </div>

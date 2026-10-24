@@ -21,6 +21,7 @@ The start command opens Job Finder at `http://127.0.0.1:8765`. Leave the termina
 - **Applied** tracks roles marked applied, interviewing, rejected, or closed.
 - **Backlog** holds new and saved roles.
 - **Deleted** is the raw JobSpy archive after duplicate merging. Every unique listing stays here, including roles also routed to Backlog or Applied. Each card shows its current route; low-fit roles can be restored to Backlog.
+- Job-board links are grouped by source. If multiple SEEK URLs were merged into one role, expand the SEEK count to open each listing.
 - **Check listings** checks saved Indeed, Glassdoor, and SEEK URLs and removes only listings clearly confirmed expired or unavailable. If a board blocks the request or the result is unclear, the job is kept. This applies regardless of application status.
 - **Reset job search** offers a partial reset that reruns the full configured import, keeps/deduplicates existing jobs, then checks saved source URLs for expiry. Full reset clears saved jobs, notes, statuses, source links, and Latest history, then runs a fresh initial import. Both keep your smart-filter profile.
 - Filter any list by location or search text. Update a job's status and notes on its card.
