@@ -22,7 +22,7 @@
     message.textContent = state.message || "";
     details.replaceChildren();
     (state.details || []).forEach((item) => {
-      const line = document.createElement("span");
+      const line = document.createElement("li");
       line.textContent = item;
       details.appendChild(line);
     });

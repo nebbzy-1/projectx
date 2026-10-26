@@ -83,9 +83,9 @@
           <span class="status-pulse" aria-hidden="true"></span>
           <div class="status-copy">
             <strong id="statusMessage">{{ search_state.message }}</strong>
-            <div class="status-details" id="statusDetails">
-              {% if search_state.details %}{% for detail in search_state.details %}<span>{{ detail }}</span>{% endfor %}{% endif %}
-            </div>
+            <ul class="status-details" id="statusDetails">
+              {% if search_state.details %}{% for detail in search_state.details %}<li>{{ detail }}</li>{% endfor %}{% endif %}
+            </ul>
           </div>
         </div>
         <div class="progress-wrap" id="progressWrap" {% if not search_state.progress %}hidden{% endif %}>
