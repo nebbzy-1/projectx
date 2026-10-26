@@ -13,7 +13,7 @@
       <a class="brand" href="{{ url_for('index', tab='backlog') }}"><span class="brand-mark">J</span><span>Job Finder</span></a>
       <div class="side-label">YOUR JOBS</div>
       <nav class="main-nav" aria-label="Job lists">
-        {% for name, label in [('latest', 'Latest'), ('prioritized', 'Prioritized'), ('applied', 'Applied'), ('backlog', 'Backlog'), ('deleted', 'Deleted')] %}
+        {% for name, label in [('prioritized', 'Prioritized'), ('latest', 'Latest'), ('applied', 'Applied'), ('backlog', 'Backlog'), ('deleted', 'Deleted')] %}
         <a class="nav-link {{ 'active' if tab == name else '' }}" href="{{ url_for('index', tab=name, location=location, q=query) }}">
           <span>{{ label }}</span><span class="nav-count">{{ counts[name] }}</span>
         </a>
