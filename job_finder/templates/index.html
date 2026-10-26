@@ -13,22 +13,30 @@
       <a class="brand" href="{{ url_for('index', tab='backlog') }}"><span class="brand-mark">J</span><span>Job Finder</span></a>
       <div class="side-label">YOUR JOBS</div>
       <nav class="main-nav" aria-label="Job lists">
-        {% for name, label in [('latest', 'Latest'), ('applied', 'Applied'), ('backlog', 'Backlog'), ('deleted', 'Deleted')] %}
+        {% for name, label in [('latest', 'Latest'), ('prioritized', 'Prioritized'), ('applied', 'Applied'), ('backlog', 'Backlog'), ('deleted', 'Deleted')] %}
         <a class="nav-link {{ 'active' if tab == name else '' }}" href="{{ url_for('index', tab=name, location=location, q=query) }}">
           <span>{{ label }}</span><span class="nav-count">{{ counts[name] }}</span>
         </a>
         {% endfor %}
       </nav>
-      <details class="reset-tools">
-        <summary><span aria-hidden="true">↻</span> Reset job search</summary>
-        <p>Refresh every configured title and location, or clear saved job data and start again.</p>
-        <form action="{{ url_for('partial_reset') }}" method="post">
-          <button class="reset-option" type="submit" {% if search_state.busy %}disabled{% endif %}>Partial reset <small>Refill pool; remove confirmed expired listings</small></button>
+      <div class="sidebar-controls">
+        <form class="sidebar-check-form" action="{{ url_for('refresh_backlog') }}" method="post">
+          <input type="hidden" name="return_tab" value="{{ tab }}">
+          <button class="primary-button" id="checkListingsButton" type="submit" {% if search_state.busy %}disabled{% endif %}>
+            <span aria-hidden="true">↻</span> Check listings
+          </button>
         </form>
-        <form action="{{ url_for('full_reset') }}" method="post" onsubmit="return confirm('Full reset permanently clears all saved jobs, application statuses, notes, and Latest history before searching again. Continue?')">
-          <button class="reset-option destructive" type="submit" {% if search_state.busy %}disabled{% endif %}>Full reset <small>Clear saved jobs and search again</small></button>
-        </form>
-      </details>
+        <details class="reset-tools">
+          <summary><span aria-hidden="true">↻</span> Reset job search</summary>
+          <p>Refresh every configured title and location, or clear saved job data and start again.</p>
+          <form action="{{ url_for('partial_reset') }}" method="post">
+            <button class="reset-option" type="submit" {% if search_state.busy %}disabled{% endif %}>Partial reset <small>Refill pool; remove confirmed expired listings</small></button>
+          </form>
+          <form action="{{ url_for('full_reset') }}" method="post" onsubmit="return confirm('Full reset permanently clears all saved jobs, application statuses, notes, and Latest history before searching again. Continue?')">
+            <button class="reset-option destructive" type="submit" {% if search_state.busy %}disabled{% endif %}>Full reset <small>Clear saved jobs and search again</small></button>
+          </form>
+        </details>
+      </div>
       <div class="sidebar-bottom">
         <span class="local-indicator"></span>
         <div><strong>Saved on this Mac</strong><small>Your lists and notes stay local.</small></div>
@@ -43,8 +51,9 @@
           <p class="page-subtitle">
             {% if tab == 'applied' %}Keep track of applications and follow-ups.
             {% elif tab == 'latest' %}New matching roles from your latest manual search.
-            {% elif tab == 'deleted' %}Raw JobSpy archive. Every unique listing stays here after duplicate merging, including roles routed to Backlog or set aside as low fit.
-            {% else %}Your saved pool of matching roles, ready to review. Refresh checks saved job-board listings and removes only confirmed expired jobs.{% endif %}
+            {% elif tab == 'prioritized' %}The 30 highest-ranked open roles for your profile, assessed by AI.
+            {% elif tab == 'deleted' %}Raw archive of unique listings collected from job boards and SEEK alerts, after duplicates are merged.
+            {% else %}Your saved pool of matching roles, ready to review. Check listings searches Indeed and Glassdoor, imports SEEK alerts, and removes confirmed expired jobs.{% endif %}
           </p>
         </div>
         {% if tab == 'latest' %}
@@ -53,11 +62,9 @@
             <span aria-hidden="true">↻</span> Refresh latest
           </button>
         </form>
-        {% elif tab == 'backlog' %}
-        <form action="{{ url_for('refresh_backlog') }}" method="post">
-          <button class="primary-button" id="backlogRefreshButton" type="submit" {% if search_state.busy %}disabled{% endif %}>
-            <span aria-hidden="true">↻</span> Check listings
-          </button>
+        {% elif tab == 'prioritized' %}
+        <form action="{{ url_for('prioritize_jobs') }}" method="post" {% if ai_pending_count %}onsubmit="return confirm('Send your profile{% if candidate_profile.resume_summary %}, resume summary{% endif %}, and {{ ai_pending_count }} new or changed job records to OpenAI for AI ranking? API usage may incur separate charges.');"{% endif %}>
+          <button class="primary-button" type="submit" {% if search_state.busy or not ai_api_key_configured or not ai_candidate_count %}disabled{% endif %}>✦ Prioritize top 30</button>
         </form>
         {% endif %}
       </header>
@@ -90,56 +97,52 @@
         </form>
       </section>
 
-      {% if tab == 'backlog' %}
-      <details class="smart-filter-panel gmail-panel">
-        <summary>
-          <span class="filter-icon">✉</span>
-          <span class="smart-filter-heading"><strong>SEEK alerts from Gmail</strong><small>Import labelled alerts into your job lists</small></span>
-          <span class="local-tag">{{ 'Connected' if gmail_connected else 'Setup needed' if gmail_client_configured else 'OAuth setup needed' }}</span>
-          <span class="dropdown-chevron" aria-hidden="true"><svg viewBox="0 0 12 12"><path d="m2.5 4 3.5 3.5L9.5 4" /></svg></span>
-        </summary>
-        <div class="smart-filter-content gmail-content">
-          <p>Gmail search: <code>{{ gmail_query }}</code>. Only matching emails are read. Existing alert emails are included on the first sync.</p>
-          {% if not gmail_client_configured %}
-          <p class="gmail-setup-note">First add your Google OAuth client file as <code>data/gmail_oauth_client.json</code>. Setup steps are in the README.</p>
-          {% elif not gmail_connected %}
-          <a class="primary-button gmail-connect" href="{{ url_for('gmail_oauth_connect') }}">Connect Gmail</a>
-          {% else %}
-          <div class="gmail-actions">
-            <form action="{{ url_for('gmail_sync') }}" method="post">
-              <button class="primary-button" type="submit" {% if search_state.busy %}disabled{% endif %}>Sync SEEK emails</button>
-            </form>
-            <form action="{{ url_for('gmail_cleanup') }}" method="post" onsubmit="return confirm('Move imported SEEK alert emails older than {{ gmail_stale_after_days }} days to Gmail Trash? Emails that were not imported are left alone.')">
-              <button class="secondary-button" type="submit" {% if search_state.busy %}disabled{% endif %}>Trash old imported alerts</button>
+      {% if tab == 'prioritized' %}
+      <section class="ai-priority-panel">
+        <div class="ai-priority-heading">
+          <div><strong>AI ranking · {{ ai_model }}</strong><small>{{ ai_candidate_count }} un-applied jobs · {{ ai_pending_count }} need assessment · {{ ai_ranked_count }} currently ranked</small></div>
+          <span class="local-tag">{{ '.env key active' if ai_api_key_source == 'dotenv' else ('Environment key active' if ai_api_key_source == 'environment' else ('API key saved' if ai_api_key_configured else 'Setup needed')) }}</span>
+        </div>
+        <p>Ranking sends your circumstances{% if candidate_profile.resume_summary %}, optional resume summary{% endif %}, and job details to OpenAI. It uses API billing separately from a ChatGPT subscription. Jobs stay in their current lists.</p>
+        {% if not ai_api_key_configured %}
+        <form class="ai-key-form" action="{{ url_for('update_ai_api_key') }}" method="post">
+          <label for="openaiApiKey">OpenAI API key</label>
+          <div><input id="openaiApiKey" type="password" name="api_key" required autocomplete="new-password" placeholder="Paste an API key"><button class="secondary-button" type="submit">Save key to .env</button></div>
+          <small>The key is saved in the ignored project .env file and is never shown in the page after saving.</small>
+        </form>
+        {% elif ai_api_key_source == 'environment' %}
+        <p>The <code>OPENAI_API_KEY</code> value from the app’s launch environment is active. It takes precedence over a locally saved key; change that value and restart the app to use a different key.</p>
+        {% else %}
+        <details class="ai-key-settings"><summary>Change API key</summary>
+          <form class="ai-key-form" action="{{ url_for('update_ai_api_key') }}" method="post">
+            <label for="openaiApiKey">Replacement OpenAI API key</label>
+          <div><input id="openaiApiKey" type="password" name="api_key" required autocomplete="new-password" placeholder="Paste a replacement API key"><button class="secondary-button" type="submit">Save key to .env</button></div>
+          </form>
+        </details>
+        {% endif %}
+        <details class="settings-panel candidate-profile-panel">
+          <summary>
+            <span class="settings-icon">◎</span>
+            <span class="settings-heading"><strong>AI ranking profile</strong><small>Set the background AI uses to rank your roles</small></span>
+            <span class="dropdown-chevron" aria-hidden="true"><svg viewBox="0 0 12 12"><path d="m2.5 4 3.5 3.5L9.5 4" /></svg></span>
+          </summary>
+          <div class="settings-content">
+            <form class="profile-form" action="{{ url_for('update_profile') }}" method="post">
+              <label for="candidateCircumstances">Your circumstances</label>
+              <textarea id="candidateCircumstances" name="circumstances" maxlength="4000" rows="3" placeholder="Include admission status, PLT, practice interests, and experience.">{{ candidate_profile.circumstances }}</textarea>
+              <label for="candidateResume">Optional resume summary</label>
+              <textarea id="candidateResume" name="resume_summary" maxlength="8000" rows="3" placeholder="Paste experience, skills, and practice areas for the AI to consider.">{{ candidate_profile.resume_summary }}</textarea>
+              <div class="profile-controls">
+                <label class="pqe-control" for="maxRequiredPqe">Maximum required PQE to consider
+                  <span><input id="maxRequiredPqe" type="number" name="max_required_pqe" min="0" max="30" step="0.5" value="{{ candidate_profile.max_required_pqe }}"> years</span>
+                </label>
+                <button class="save-button" type="submit">Save AI profile</button>
+              </div>
+              <p class="settings-note">This profile is used only when you choose to run AI ranking. It does not filter or remove jobs locally.</p>
             </form>
           </div>
-          <p class="filter-explainer">Cleanup moves only previously imported SEEK messages older than {{ gmail_stale_after_days }} days to Gmail Trash. It does not permanently delete them or touch other email.</p>
-          {% endif %}
-        </div>
-      </details>
-
-      <details class="smart-filter-panel">
-        <summary class="smart-filter-summary">
-          <span class="filter-icon">✦</span>
-          <span class="smart-filter-heading"><strong>Smart fit filter</strong><small>Screen roles against your circumstances</small></span>
-          <span class="local-tag">Saved on this Mac</span>
-          <span class="dropdown-chevron" aria-hidden="true"><svg viewBox="0 0 12 12"><path d="m2.5 4 3.5 3.5L9.5 4" /></svg></span>
-        </summary>
-        <div class="smart-filter-content">
-          <form class="profile-form" action="{{ url_for('update_profile') }}" method="post">
-            <label for="candidateCircumstances">Your circumstances</label>
-            <textarea id="candidateCircumstances" name="circumstances" maxlength="4000" rows="3" placeholder="Include admission status, PLT, practice interests, experience, and the roles you want.">{{ candidate_profile.circumstances }}</textarea>
-            <div class="profile-controls">
-              <label class="pqe-control" for="maxRequiredPqe">Maximum required PQE
-                <span><input id="maxRequiredPqe" type="number" name="max_required_pqe" min="0" max="30" step="0.5" value="{{ candidate_profile.max_required_pqe }}"> years</span>
-              </label>
-              <label class="enable-filter"><input type="checkbox" name="enabled" {{ 'checked' if candidate_profile.enabled else '' }}> Apply smart filter</label>
-              <button class="save-button" type="submit">Save and recheck jobs</button>
-            </div>
-            <p class="filter-explainer">Local rules flag explicit PQE requirements above your limit and senior-only titles. Unclear jobs stay visible for review. No external AI service is used.</p>
-          </form>
-        </div>
-      </details>
+        </details>
+      </section>
       {% endif %}
 
       <form class="filter-bar" method="get" action="{{ url_for('index') }}" id="filterForm">
@@ -173,8 +176,21 @@
               {% if job.location %}<span>{{ job.location }}</span>{% endif %}
               {% if job.date_posted %}<span>Posted {{ job.date_posted }}</span>{% endif %}
             </div>
-            {% if tab == 'deleted' %}<div class="archive-route {{ job.fit_status }}">{{ job.archive_route }}</div>{% endif %}
-            <div class="fit-assessment {{ job.fit_status }}"><strong>{{ {'recommended': 'Likely fit', 'review': 'Review', 'skip': 'Low fit'}[job.fit_status] }}</strong><span>{{ job.fit_reason }}</span></div>
+            {% if tab == 'prioritized' %}
+            <section class="ai-rank-card">
+              <span class="ai-rank-number">#{{ loop.index }}</span>
+              <span class="ai-score">{{ job.ai_score }}<small>/100</small></span>
+              <div class="ai-rank-copy">
+                <strong>{{ job.ai_tier.replace('_', ' ')|title }} · {{ job.ai_confidence }} confidence{% if job.ai_hard_blocker %} · mandatory mismatch{% endif %}</strong>
+                <p>{{ job.ai_summary }}</p>
+                <details class="ai-evidence"><summary>Why this ranking</summary>
+                  {% if job.ai_strengths %}<strong>Matches</strong><ul>{% for item in job.ai_strengths %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+                  {% if job.ai_gaps %}<strong>Gaps or unknowns</strong><ul>{% for item in job.ai_gaps %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+                  {% if job.ai_evidence %}<div class="ai-evidence-quotes">{% for item in job.ai_evidence %}<p><q>{{ item.job_excerpt }}</q> · {{ item.candidate_fact }} — {{ item.assessment }}</p>{% endfor %}</div>{% endif %}
+                </details>
+              </div>
+            </section>
+            {% endif %}
             {% if job.sources %}
             <div class="source-list" aria-label="Job board links">
               {% for group in job.source_groups %}
@@ -206,11 +222,6 @@
               <input id="notes-{{ job.id }}" type="text" name="notes" value="{{ job.notes }}" maxlength="2000" placeholder="Add a note">
               <button class="save-button" type="submit">Save</button>
             </form>
-            {% if tab == 'deleted' and job.fit_status == 'skip' and job.status in ['new', 'saved'] %}
-            <form class="restore-form" action="{{ url_for('restore_job', job_id=job.id) }}" method="post">
-              <button class="restore-button" type="submit">Restore to Backlog</button>
-            </form>
-            {% endif %}
           </div>
           {% if job.description_text %}
           <details class="job-description">
@@ -221,11 +232,15 @@
         </article>
         {% else %}
         <div class="empty-state">
-          <div class="empty-icon">{% if tab == 'latest' %}✦{% elif tab == 'applied' %}✓{% else %}⌕{% endif %}</div>
-          <h2>{% if tab == 'latest' %}No latest jobs yet{% elif tab == 'applied' %}No applications tracked yet{% elif tab == 'deleted' %}No raw listings yet{% else %}Your backlog is empty{% endif %}</h2>
+          <div class="empty-icon">{% if tab in ['latest', 'prioritized'] %}✦{% elif tab == 'applied' %}✓{% else %}⌕{% endif %}</div>
+          <h2>{% if tab == 'latest' %}No latest jobs yet{% elif tab == 'prioritized' and not ai_candidate_count %}No open jobs to prioritize{% elif tab == 'prioritized' and not ai_api_key_configured %}Set up AI ranking{% elif tab == 'prioritized' and ai_pending_count %}No AI rankings yet{% elif tab == 'prioritized' %}No prioritized jobs match these filters{% elif tab == 'applied' %}No applications tracked yet{% elif tab == 'deleted' %}No raw listings yet{% else %}Your backlog is empty{% endif %}</h2>
           <p>{% if tab == 'latest' %}Use “Refresh latest” when you want to look for newly posted roles.
+             {% elif tab == 'prioritized' and not ai_candidate_count %}New and saved jobs will be ranked here after they are collected.
+             {% elif tab == 'prioritized' and not ai_api_key_configured %}Save an OpenAI API key above, then run AI ranking to compare your open jobs against your profile.
+             {% elif tab == 'prioritized' and ai_pending_count %}Select “Prioritize top 30” to assess jobs that are new or changed.
+             {% elif tab == 'prioritized' %}Try another location or search term. Prioritized shows only the top 30 open roles.
              {% elif tab == 'applied' %}Update a job’s status to see it in this list.
-             {% elif tab == 'deleted' %}Unique listings returned by JobSpy will appear here after duplicates are merged. Each label shows where the smart filter routed the job.
+             {% elif tab == 'deleted' %}Unique Indeed, Glassdoor, and SEEK listings will appear here after duplicates are merged.
              {% elif search_state.busy %}The first search is underway. Jobs will appear here as they are found.
              {% else %}Matching jobs from your configured searches will appear here.{% endif %}</p>
         </div>
@@ -241,6 +256,7 @@
       {% endif %}
 
       {% if tab == 'latest' %}<p class="list-note">Latest keeps up to {{ latest_limit }} jobs. Older items are trimmed from this list only and remain in Backlog.</p>{% endif %}
+      {% if tab == 'prioritized' %}<p class="list-note">The top 30 are ordered by AI score; jobs without a confirmed mandatory blocker come first when scores tie. Rankings are cached until a job, profile, allowed location, model, or prompt changes. Jobs are not moved or deleted.</p>{% endif %}
     </main>
   </div>
 </body>

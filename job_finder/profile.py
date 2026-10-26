@@ -6,21 +6,21 @@ from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PROFILE_PATH = PROJECT_ROOT / "data" / "smart_profile.json"
+PROFILE_PATH = PROJECT_ROOT / "data" / "candidate_profile.json"
 DEFAULT_CANDIDATE_PROFILE = {
-    "enabled": True,
     "circumstances": (
         "Recently admitted graduate lawyer in Australia; PLT completed. "
         "Looking for graduate or junior lawyer roles."
     ),
     "max_required_pqe": 1.0,
+    "resume_summary": "",
 }
 
 
 def normalize_candidate_profile(values: dict[str, Any] | None) -> dict[str, Any]:
     values = values or {}
     if not isinstance(values, dict):
-        raise ValueError("Smart filter profile must be an object.")
+        raise ValueError("AI ranking profile must be an object.")
     try:
         max_required_pqe = float(values.get("max_required_pqe", DEFAULT_CANDIDATE_PROFILE["max_required_pqe"]))
     except (TypeError, ValueError) as error:
@@ -30,14 +30,18 @@ def normalize_candidate_profile(values: dict[str, Any] | None) -> dict[str, Any]
     circumstances = str(values.get("circumstances", DEFAULT_CANDIDATE_PROFILE["circumstances"])).strip()
     if len(circumstances) > 4000:
         raise ValueError("Keep the circumstances description under 4,000 characters.")
+    resume_summary = str(values.get("resume_summary", "")).strip()
+    if len(resume_summary) > 8000:
+        raise ValueError("Keep the optional resume summary under 8,000 characters.")
     return {
-        "enabled": bool(values.get("enabled", DEFAULT_CANDIDATE_PROFILE["enabled"])),
         "circumstances": circumstances,
         "max_required_pqe": max_required_pqe,
+        "resume_summary": resume_summary,
     }
 
 
-def load_candidate_profile(path: Path = PROFILE_PATH) -> dict[str, Any]:
+def load_candidate_profile(path: Path | None = None) -> dict[str, Any]:
+    path = path or PROFILE_PATH
     try:
         values = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):

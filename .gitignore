@@ -2,11 +2,15 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+.env
+.env.*
+!.env.example
 data/*.sqlite3
 data/*.sqlite3-shm
 data/*.sqlite3-wal
 data/*.log
-data/smart_profile.json*
+data/candidate_profile.json*
 data/gmail_oauth_client.json
 data/gmail_token.json
 data/gmail_token.tmp
+data/openai_api_key.json*

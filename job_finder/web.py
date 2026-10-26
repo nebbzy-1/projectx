@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 import threading
+from datetime import datetime, timezone
 from typing import Any
 import webbrowser
 from html.parser import HTMLParser
@@ -19,7 +20,7 @@ from .database import (
     latest_job_count,
     list_job_sources,
     list_tab_jobs,
-    restore_job_to_backlog,
+    save_latest_jobs,
     set_note,
     set_status,
 )
@@ -29,19 +30,26 @@ from .runner import (
     commit_latest_refresh,
     preview_latest_refresh,
     run_initial_import,
+    run_listing_search,
 )
 from .availability import remove_confirmed_expired
+from .ai_ranker import (
+    AIRankingError,
+    api_key_configured,
+    api_key_source,
+    prioritized_view_data,
+    rank_open_jobs,
+    save_api_key,
+)
 from .gmail_import import (
     GmailSetupError,
     authorize_gmail,
-    gmail_client_configured,
     gmail_connected,
     sync_seek_alerts,
     trash_stale_imported_alerts,
 )
 from .profile import load_candidate_profile, normalize_candidate_profile, save_candidate_profile
 from .scheduler import remove_schedule
-from .smart_filter import ensure_jobs_classified, reclassify_jobs
 
 
 class _DescriptionParser(HTMLParser):
@@ -89,7 +97,8 @@ class SearchController:
 
     ACTIVE_TASKS = {
         "initial_import", "partial_reset", "full_reset", "listing_check",
-        "gmail_sync", "gmail_cleanup", "latest_search", "confirmation", "committing",
+        "gmail_cleanup", "ai_ranking", "latest_search",
+        "confirmation", "committing",
     }
 
     def __init__(self, config: dict, database_path=DATABASE_PATH):
@@ -98,11 +107,9 @@ class SearchController:
         self.database_path = database_path
         self._lock = threading.RLock()
         self._preview: LatestPreview | None = None
-        self._preview_latest_jobs: list[dict] = []
         self._preview_token: str | None = None
         connection = connect(self.database_path)
         try:
-            ensure_jobs_classified(connection, self.config.get("candidate_profile", {}))
             self._seeded = get_metadata(connection, INITIAL_IMPORT_KEY) is not None
         finally:
             connection.close()
@@ -281,7 +288,6 @@ class SearchController:
             if self.config["initial_import_enabled"] and not self._seeded:
                 return False
             self._preview = None
-            self._preview_latest_jobs = []
             self._preview_token = None
             self._state.update(
                 task="latest_search",
@@ -306,15 +312,12 @@ class SearchController:
                 )
                 return
 
-            visible_jobs = [job for job in preview.jobs if job.get("fit_status") != "skip"]
-            skipped_count = len(preview.jobs) - len(visible_jobs)
             current_count = latest_job_count(connection)
-            total_after = current_count + len(visible_jobs)
-            if total_after > LATEST_LIMIT - 1:
+            total_after = current_count + len(preview.jobs)
+            if total_after > LATEST_LIMIT:
                 token = secrets.token_urlsafe(24)
                 with self._lock:
                     self._preview = preview
-                    self._preview_latest_jobs = visible_jobs
                     self._preview_token = token
                     self._state.update(
                         task="confirmation",
@@ -322,18 +325,15 @@ class SearchController:
                         error=False,
                         progress=None,
                         preview_token=token,
-                        preview_count=len(visible_jobs),
-                        skipped_count=skipped_count,
+                        preview_count=len(preview.jobs),
                         total_after=total_after,
                         requires_confirmation=True,
                         event_id=self._state["event_id"] + 1,
                     )
                 return
 
-            added = commit_latest_refresh(connection, preview.jobs, latest_jobs=visible_jobs)
+            added = commit_latest_refresh(connection, preview.jobs)
             message = f"Refresh complete: {added} jobs added to Latest."
-            if skipped_count:
-                message += f" {skipped_count} low-fit jobs were saved in Deleted."
             self._finish_success(message)
         except Exception as error:
             self._finish_error(f"Refresh failed; nothing was added: {error}")
@@ -350,23 +350,18 @@ class SearchController:
             ):
                 return False, "That refresh preview has expired. Start a new refresh."
             preview = self._preview
-            visible_jobs = self._preview_latest_jobs
-            skipped_count = int(self._state.get("skipped_count", 0))
             self._preview = None
-            self._preview_latest_jobs = []
             self._preview_token = None
             self._state.update(task="committing", message="Saving the confirmed refresh…")
         connection = connect(self.database_path)
         try:
-            added = commit_latest_refresh(connection, preview.jobs, latest_jobs=visible_jobs)
+            added = commit_latest_refresh(connection, preview.jobs)
         except Exception as error:
             self._finish_error(f"Refresh could not be saved: {error}")
             return False, str(error)
         finally:
             connection.close()
         message = f"Refresh complete: {added} jobs added to Latest."
-        if skipped_count:
-            message += f" {skipped_count} low-fit jobs were saved in Deleted."
         self._finish_success(message)
         return True, "Refresh saved."
 
@@ -379,7 +374,6 @@ class SearchController:
             ):
                 return False, "That refresh preview has expired."
             self._preview = None
-            self._preview_latest_jobs = []
             self._preview_token = None
             self._state.update(
                 task="idle",
@@ -391,21 +385,16 @@ class SearchController:
             )
             return True, "Refresh cancelled."
 
-    def update_candidate_profile(self, values: dict[str, Any]) -> tuple[bool, int]:
+    def update_candidate_profile(self, values: dict[str, Any]) -> bool:
         profile = normalize_candidate_profile(values)
         with self._lock:
             if self._state["task"] in self.ACTIVE_TASKS:
-                return False, 0
+                return False
             profile = save_candidate_profile(profile)
             self.config["candidate_profile"] = profile
-            connection = connect(self.database_path)
-            try:
-                reclassified = reclassify_jobs(connection, profile, reset_overrides=True)
-            finally:
-                connection.close()
             self._state.update(
                 task="done",
-                message=f"Smart filter profile saved. Rechecked {reclassified} saved jobs.",
+                message="AI ranking profile saved. Existing rankings will refresh the next time you run Prioritize top 30.",
                 error=False,
                 progress=None,
                 details=[],
@@ -413,7 +402,7 @@ class SearchController:
                 requires_confirmation=False,
                 event_id=self._state["event_id"] + 1,
             )
-            return True, reclassified
+            return True
 
     def start_listing_check(self) -> bool:
         with self._lock:
@@ -421,9 +410,9 @@ class SearchController:
                 return False
             self._state.update(
                 task="listing_check",
-                message="Checking saved Indeed and Glassdoor listings…",
+                message="Searching Indeed and Glassdoor for recent listings…",
                 error=False,
-                progress=None,
+                progress={"done": 0, "total": 0, "label": "Preparing job-board searches"},
                 details=[],
                 event_id=self._state["event_id"] + 1,
             )
@@ -432,55 +421,123 @@ class SearchController:
 
     def _run_listing_check(self) -> None:
         connection = connect(self.database_path)
+        board_log = "Indeed/Glassdoor added: 0; search did not complete."
+        seek_log = "SEEK added: 0; email sync did not complete."
+        expired_log = "Deleted: expiry check did not complete."
+        latest_log = "Latest: no new jobs were added."
+        new_job_ids: list[int] = []
+        errors: list[str] = []
+        board_search_ok = False
         try:
-            removed, uncertain = remove_confirmed_expired(connection)
-            message = f"Listing check complete: {removed} confirmed expired jobs removed."
-            if uncertain:
-                message += f" {uncertain} could not be confirmed and were kept."
-            self._finish_success(message)
-        except Exception as error:
-            self._finish_error(f"Listing check failed: {error}")
-        finally:
-            connection.close()
-
-    def start_gmail_sync(self) -> bool:
-        with self._lock:
-            if self._state["task"] in self.ACTIVE_TASKS:
-                return False
-            self._state.update(
-                task="gmail_sync",
-                message="Reading SEEK alert emails from Gmail…",
-                error=False,
-                progress=None,
-                details=[],
-                event_id=self._state["event_id"] + 1,
-            )
-        threading.Thread(target=self._run_gmail_sync, daemon=True).start()
-        return True
-
-    def _run_gmail_sync(self) -> None:
-        connection = connect(self.database_path)
-        try:
-            summary = sync_seek_alerts(connection, self.config)
-            if summary.messages_processed:
-                result = (
-                    f"read {summary.jobs_found} SEEK listing entries across "
-                    f"{summary.messages_processed} emails, added {summary.jobs_added} new jobs, "
-                    f"and matched {summary.jobs_existing} previously seen SEEK links."
+            try:
+                board_summary = run_listing_search(
+                    connection, self.config, progress=self._update_listing_progress
                 )
-                result += (
-                    f" {summary.messages_without_jobs} emails had no readable SEEK job links;"
-                    f" {summary.messages_without_body} had no readable message body."
+                site_stats = board_summary.sites
+                board_added = sum(stats["added"] for stats in site_stats.values())
+                board_existing = sum(stats["existing"] for stats in site_stats.values())
+                new_job_ids.extend(board_summary.new_job_ids)
+                indeed = site_stats.get("indeed", {"found": 0, "added": 0, "existing": 0})
+                glassdoor = site_stats.get("glassdoor", {"found": 0, "added": 0, "existing": 0})
+                board_log = (
+                    f"Indeed/Glassdoor added: {board_added} new; {board_existing} already saved or duplicates "
+                    f"(Indeed {indeed['added']} added, Glassdoor {glassdoor['added']} added; "
+                    f"up to {board_summary.requested} results across {board_summary.completed_searches} searches, "
+                    f"covering the last {board_summary.hours_old} hours)."
                 )
+                errors.extend(board_summary.errors)
+                board_search_ok = not board_summary.errors
+            except Exception as error:
+                board_log = f"Indeed/Glassdoor added: 0; search failed: {error}"
+                errors.append(f"Indeed/Glassdoor search: {error}")
+
+            with self._lock:
+                if self._state["task"] == "listing_check":
+                    self._state.update(
+                        message="Reading new SEEK alerts from Gmail…",
+                        progress=None,
+                    )
+            if not gmail_connected():
+                seek_log = "SEEK added: 0; Gmail is not connected, so email alerts were skipped."
             else:
-                result = "no new SEEK alert emails to process; saved listings are already in your job lists."
-            self._finish_success(
-                f"Gmail sync complete: checked {summary.messages_seen} labelled emails; {result}"
-            )
+                try:
+                    seek_summary = sync_seek_alerts(connection, self.config)
+                    new_job_ids.extend(seek_summary.new_job_ids)
+                    seek_log = (
+                        f"SEEK added: {seek_summary.jobs_added} new; {seek_summary.jobs_existing} already saved; "
+                        f"checked {seek_summary.messages_seen} labelled emails "
+                        f"({seek_summary.messages_processed} processed, "
+                        f"{seek_summary.messages_without_jobs} without readable job links, "
+                        f"{seek_summary.messages_without_body} without a readable body)."
+                    )
+                except Exception as error:
+                    seek_log = f"SEEK added: 0; email sync failed: {error}"
+                    errors.append(f"SEEK email sync: {error}")
+
+            with self._lock:
+                if self._state["task"] == "listing_check":
+                    self._state.update(
+                        message="Checking all saved listings for confirmed expiry…",
+                        progress={"done": 0, "total": 0, "label": "Checking source listings"},
+                    )
+            try:
+                removed, uncertain = remove_confirmed_expired(connection)
+                expired_log = (
+                    f"Deleted: {removed} confirmed expired jobs; {uncertain} unclear listings were kept."
+                )
+            except Exception as error:
+                expired_log = f"Deleted: expiry check failed: {error}"
+                errors.append(f"Expiry check: {error}")
+
+            try:
+                unique_ids = list(dict.fromkeys(new_job_ids))
+                saved_ids = {
+                    int(row["id"])
+                    for row in connection.execute("SELECT id FROM jobs").fetchall()
+                }
+                active_ids = [job_id for job_id in unique_ids if job_id in saved_ids]
+                refreshed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                save_latest_jobs(
+                    connection,
+                    active_ids,
+                    refreshed_at,
+                    update_refresh_time=board_search_ok,
+                )
+                latest_count = min(len(active_ids), LATEST_LIMIT)
+                latest_log = (
+                    f"Latest: {latest_count} new active jobs listed; the tab keeps the newest "
+                    f"{LATEST_LIMIT} jobs total."
+                )
+            except Exception as error:
+                latest_log = f"Latest: could not update the list: {error}"
+                errors.append(f"Latest list update: {error}")
+
+            message = "Check listings complete: board search, SEEK sync, and expiry check finished."
+            if errors:
+                message = "Check listings finished with some errors; see the step logs below."
+            final_details = [expired_log, board_log, seek_log, latest_log] + [
+                f"Error: {item}" for item in errors[:5]
+            ]
+            if errors:
+                self._finish_error(message, final_details)
+            else:
+                self._finish_success(message, details=final_details)
         except Exception as error:
-            self._finish_error(f"Gmail sync failed: {error}")
+            self._finish_error(
+                f"Check listings failed: {error}",
+                [expired_log, board_log, seek_log, latest_log, f"Error: {error}"],
+            )
         finally:
             connection.close()
+
+    def _update_listing_progress(self, done: int, total: int, label: str) -> None:
+        with self._lock:
+            if self._state["task"] != "listing_check":
+                return
+            self._state.update(
+                message=f"Searching Indeed and Glassdoor: {done} of {total} searches complete.",
+                progress={"done": done, "total": total, "label": label},
+            )
 
     def start_gmail_cleanup(self) -> bool:
         with self._lock:
@@ -512,14 +569,70 @@ class SearchController:
         finally:
             connection.close()
 
-    def _finish_success(self, message: str) -> None:
+    def start_ai_ranking(self) -> bool:
+        with self._lock:
+            if self._state["task"] in self.ACTIVE_TASKS:
+                return False
+            self._state.update(
+                task="ai_ranking",
+                message="Preparing your un-applied jobs for AI ranking…",
+                error=False,
+                progress=None,
+                details=[],
+                event_id=self._state["event_id"] + 1,
+            )
+        threading.Thread(target=self._run_ai_ranking, daemon=True).start()
+        return True
+
+    def _update_ai_progress(self, done: int, total: int, label: str) -> None:
+        with self._lock:
+            if self._state["task"] != "ai_ranking":
+                return
+            self._state.update(
+                message="Ranking open jobs against your profile…",
+                progress={"done": done, "total": total, "label": label},
+            )
+
+    def _run_ai_ranking(self) -> None:
+        connection = connect(self.database_path)
+        try:
+            if self.config.get("ai_provider", "openai") != "openai":
+                raise AIRankingError("This build currently supports the OpenAI Responses API provider.")
+            summary = rank_open_jobs(
+                connection,
+                profile=self.config.get("candidate_profile", {}),
+                locations=self.config.get("locations", []),
+                model=self.config.get("ai_model", "gpt-6-luna"),
+                endpoint=self.config.get("ai_responses_url", "https://api.openai.com/v1/responses"),
+                batch_size=self.config.get("ai_batch_size", 10),
+                progress=self._update_ai_progress,
+            )
+            if summary.assessed:
+                message = (
+                    f"AI ranking complete: assessed {summary.assessed} new or changed jobs, "
+                    f"reused {summary.reused} saved assessments, and selected up to {summary.prioritized} for Prioritized."
+                )
+            else:
+                message = (
+                    f"AI priorities are up to date: reused {summary.reused} saved assessments; "
+                    f"no API calls were needed."
+                )
+            self._finish_success(message)
+        except Exception as error:
+            self._finish_error(
+                f"AI ranking stopped: {error}. Completed batches are saved; run it again to resume."
+            )
+        finally:
+            connection.close()
+
+    def _finish_success(self, message: str, details: list[str] | None = None) -> None:
         with self._lock:
             self._state.update(
                 task="done",
                 message=message,
                 error=False,
                 progress=None,
-                details=[],
+                details=details or [],
                 preview_token=None,
                 requires_confirmation=False,
                 event_id=self._state["event_id"] + 1,
@@ -549,7 +662,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
     @app.get("/")
     def index():
         tab = request.args.get("tab", "backlog").casefold()
-        if tab not in {"applied", "backlog", "latest", "deleted"}:
+        if tab not in {"applied", "backlog", "latest", "prioritized", "deleted"}:
             tab = "backlog"
         location = request.args.get("location", "")
         valid_locations = {"", *search_config["locations"]}
@@ -558,34 +671,41 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
         query = request.args.get("q", "").strip()[:100]
         page = max(1, request.args.get("page", 1, type=int) or 1)
         page_size = 50
+        candidate_profile = controller.config.get("candidate_profile", {})
 
         connection = connect(database_path)
         try:
-            total = count_tab_jobs(
+            priority_data = prioritized_view_data(
                 connection,
-                tab,
-                location or None,
-                query or None,
+                profile=candidate_profile,
+                allowed_locations=search_config["locations"],
+                model=controller.config.get("ai_model", "gpt-6-luna"),
+                location=location,
+                query=query,
             )
-            rows = list_tab_jobs(
-                connection,
-                tab,
-                location or None,
-                query or None,
-                limit=page_size,
-                offset=(page - 1) * page_size,
-            )
+            if tab == "prioritized":
+                total = priority_data["total"]
+                rows = priority_data["jobs"][(page - 1) * page_size:page * page_size]
+            else:
+                total = count_tab_jobs(
+                    connection,
+                    tab,
+                    location or None,
+                    query or None,
+                )
+                rows = list_tab_jobs(
+                    connection,
+                    tab,
+                    location or None,
+                    query or None,
+                    limit=page_size,
+                    offset=(page - 1) * page_size,
+                )
             jobs = []
             for row in rows:
                 job = dict(row)
                 job["latest_new"] = bool(job["latest_new"])
                 job["description_text"] = _plain_description(job.get("description"))
-                if job["status"] in {"applied", "interviewing", "rejected", "closed"}:
-                    job["archive_route"] = f"Application · {job['status'].replace('_', ' ').title()}"
-                elif job["fit_status"] == "skip":
-                    job["archive_route"] = "Set aside · low fit"
-                else:
-                    job["archive_route"] = "In Backlog"
                 job["sources"] = [dict(source) for source in list_job_sources(connection, job["id"])]
                 grouped_sources = {}
                 for source in job["sources"]:
@@ -599,6 +719,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
                 name: count_tab_jobs(connection, name)
                 for name in ("latest", "applied", "backlog", "deleted")
             }
+            counts["prioritized"] = priority_data["ranked_count"]
         finally:
             connection.close()
 
@@ -608,9 +729,10 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             jobs=jobs,
             total=total,
             counts=counts,
-            candidate_profile=controller.config.get("candidate_profile", {}),
+            candidate_profile=candidate_profile,
             tab_labels={
                 "latest": "Latest",
+                "prioritized": "Prioritized",
                 "applied": "Applied",
                 "backlog": "Backlog",
                 "deleted": "Deleted",
@@ -623,10 +745,13 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             statuses=STATUSES,
             search_state=controller.snapshot(),
             latest_limit=LATEST_LIMIT,
-            gmail_client_configured=gmail_client_configured(),
             gmail_connected=gmail_connected(),
-            gmail_query=search_config.get("gmail_query", "label:SEEK"),
-            gmail_stale_after_days=search_config.get("gmail_stale_after_days", 90),
+            ai_model=controller.config.get("ai_model", "gpt-6-luna"),
+            ai_api_key_configured=api_key_configured(),
+            ai_api_key_source=api_key_source(),
+            ai_candidate_count=priority_data["candidate_count"],
+            ai_pending_count=priority_data["pending_count"],
+            ai_ranked_count=priority_data["ranked_count"],
         )
 
     @app.post("/jobs/<int:job_id>")
@@ -684,40 +809,58 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
 
     @app.post("/backlog/refresh")
     def refresh_backlog():
+        return_tab = request.form.get("return_tab", "backlog").casefold()
+        if return_tab not in {"latest", "prioritized", "applied", "backlog", "deleted"}:
+            return_tab = "backlog"
         if controller.start_listing_check():
-            flash("Listing check started. Confirmed expired Indeed, Glassdoor, and SEEK listings will be removed; unclear results will be kept.", "success")
+            flash("Check listings started: Indeed, Glassdoor, SEEK email alerts, then an expiry check.", "success")
         else:
             flash("Wait for the current search or refresh to finish before checking listings.", "error")
-        return redirect(url_for("index", tab="backlog"))
-
-    @app.post("/jobs/<int:job_id>/restore")
-    def restore_job(job_id: int):
-        connection = connect(database_path)
-        try:
-            restored = restore_job_to_backlog(connection, job_id)
-        finally:
-            connection.close()
-        flash("Restored to Backlog." if restored else "That job could not be restored.", "success" if restored else "error")
-        return redirect(url_for("index", tab="deleted"))
+        return redirect(url_for("index", tab=return_tab))
 
     @app.post("/profile")
     def update_profile():
         try:
-            updated, reclassified = controller.update_candidate_profile(
+            updated = controller.update_candidate_profile(
                 {
-                    "enabled": request.form.get("enabled") == "on",
                     "circumstances": request.form.get("circumstances", ""),
                     "max_required_pqe": request.form.get("max_required_pqe", "1"),
+                    "resume_summary": request.form.get("resume_summary", ""),
                 }
             )
         except (ValueError, OSError) as error:
             flash(str(error), "error")
         else:
             if updated:
-                flash(f"Smart filter saved. Rechecked {reclassified} jobs.", "success")
+                flash("AI ranking profile saved. Existing rankings will update the next time you run Prioritize top 30.", "success")
             else:
-                flash("Wait for the current search to finish before changing the smart filter.", "error")
-        return redirect(url_for("index", tab="backlog"))
+                flash("Wait for the current search to finish before changing the AI ranking profile.", "error")
+        return redirect(url_for("index", tab="prioritized"))
+
+    @app.post("/ai/api-key")
+    def update_ai_api_key():
+        try:
+            save_api_key(request.form.get("api_key", ""))
+        except (ValueError, OSError) as error:
+            flash(str(error), "error")
+        else:
+            flash(
+                "OpenAI API key saved to the ignored .env file. API usage is billed separately from a ChatGPT subscription.",
+                "success",
+            )
+        return redirect(url_for("index", tab="prioritized"))
+
+    @app.post("/ai/prioritize")
+    def prioritize_jobs():
+        if search_config.get("ai_provider", "openai") != "openai":
+            flash("This app currently uses the OpenAI Responses API for AI ranking.", "error")
+        elif not api_key_configured():
+            flash("Save an OpenAI API key before starting AI ranking.", "error")
+        elif controller.start_ai_ranking():
+            flash("AI ranking started. Completed batches will be saved as they finish.", "success")
+        else:
+            flash("Wait for the current search or refresh to finish before ranking jobs.", "error")
+        return redirect(url_for("index", tab="prioritized"))
 
     @app.get("/gmail/oauth/connect")
     def gmail_oauth_connect():
@@ -728,17 +871,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
         except Exception as error:
             flash(f"Could not connect Gmail: {error}", "error")
         else:
-            flash("Gmail connected. Sync SEEK alerts to import the labelled emails.", "success")
-        return redirect(url_for("index", tab="backlog"))
-
-    @app.post("/gmail/sync")
-    def gmail_sync():
-        if not gmail_connected():
-            flash("Connect Gmail before importing SEEK alerts.", "error")
-        elif controller.start_gmail_sync():
-            flash("Gmail sync started.", "success")
-        else:
-            flash("Wait for the current search or sync to finish.", "error")
+            flash("Gmail connected. SEEK alerts will be imported when you press Check listings.", "success")
         return redirect(url_for("index", tab="backlog"))
 
     @app.post("/gmail/cleanup")

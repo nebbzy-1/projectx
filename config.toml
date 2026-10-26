@@ -11,13 +11,22 @@ sites = ["indeed", "glassdoor"]
 results_per_site = { indeed = 25, glassdoor = 25 }
 hours_old = 24
 country_indeed = "Australia"
+# Check listings caps a combined Indeed/Glassdoor refresh at this many requested results.
+check_results_total = 1500
 
 [gmail]
-# Add this label to SEEK alert messages in Gmail. The initial sync also imports messages already carrying it.
+# Add this label to SEEK alert messages in Gmail. Check listings imports existing labelled messages too.
 query = "label:SEEK"
 max_messages = 250
-# The cleanup button only moves previously imported SEEK alerts older than this to Gmail Trash.
+# Retention threshold, in days, for previously imported SEEK alert cleanup.
 stale_after_days = 90
+
+[ai]
+# AI ranking runs only when requested from the Prioritized tab.
+provider = "openai"
+model = "gpt-6-luna"
+responses_url = "https://api.openai.com/v1/responses"
+batch_size = 10
 
 [initial_import]
 # Seed the backlog once on the first app launch.

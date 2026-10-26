@@ -13,8 +13,7 @@
   const retryForm = document.getElementById("retryForm");
   const refreshButton = document.getElementById("refreshButton");
   const resetButtons = document.querySelectorAll(".reset-option");
-  const backlogRefreshButton = document.getElementById("backlogRefreshButton");
-  const gmailButtons = document.querySelectorAll(".gmail-actions button");
+  const checkListingsButton = document.getElementById("checkListingsButton");
 
   function updateStatus(state) {
     statusBox.dataset.task = state.task;
@@ -38,15 +37,12 @@
     if (retryForm) retryForm.hidden = !state.can_retry_seed;
     if (refreshButton) refreshButton.disabled = Boolean(state.busy || state.can_retry_seed);
     resetButtons.forEach((button) => { button.disabled = Boolean(state.busy); });
-    if (backlogRefreshButton) backlogRefreshButton.disabled = Boolean(state.busy);
-    gmailButtons.forEach((button) => { button.disabled = Boolean(state.busy); });
+    if (checkListingsButton) checkListingsButton.disabled = Boolean(state.busy);
 
     if (state.task === "confirmation" && state.preview_token && !handledPreviews.has(state.preview_token)) {
       handledPreviews.add(state.preview_token);
-      const skipped = Number(state.skipped_count || 0);
-      const hiddenNote = skipped ? `\n\n${skipped} low-fit jobs will be marked as set aside in the Deleted archive.` : "";
-      const prompt = `This refresh found ${state.preview_count} jobs to show. Latest will contain ${state.total_after} jobs.${hiddenNote}\n\n` +
-        `Latest keeps up to 26. If it goes over 26, the oldest jobs are removed from Latest only; they stay in Backlog. Continue?`;
+      const prompt = `This refresh found ${state.preview_count} jobs to show. Latest will contain ${state.total_after} jobs.\n\n` +
+        `Latest keeps up to 30. If it goes over 30, the oldest jobs are removed from Latest only; they stay in Backlog. Continue?`;
       const endpoint = window.confirm(prompt) ? "/api/latest/confirm" : "/api/latest/cancel";
       fetch(endpoint, {
         method: "POST",

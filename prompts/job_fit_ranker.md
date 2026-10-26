@@ -1,8 +1,8 @@
 # AI Job Fit Ranker: Prompt and Integration Brief
 
-**Status:** design reference only. The current Job Finder app uses a local rule-based filter. This prompt is not wired into the app and does not call an AI service.
+**Status:** used by the opt-in AI ranking action in the Prioritized tab. Ranking assesses new and saved, un-applied jobs, then displays at most the 30 highest scores; it never changes a job's list, status, or deletion state.
 
-This document describes the intended AI filter for Australian legal roles. It is written to be usable as a developer prompt with a structured response schema. Treat the scoring rubric and routing thresholds as versioned product settings; tune them against labeled examples before enabling automated routing.
+This document defines the AI assessor for Australian legal roles. It is used as a developer prompt with a structured response schema. The scoring rubric is versioned; review it against labeled examples as you refine it.
 
 ## Developer prompt
 
@@ -36,11 +36,11 @@ SCORING (0–100, using the same rubric for every job and every batch)
 
 Award points only for evidence in the supplied candidate/job data. Missing information is unknown, not a mismatch; reflect it in confidence and the concise explanation. Score jobs independently: do not normalize scores to a batch, compare one candidate's jobs against each other while scoring, or change the rubric to force a ranking spread.
 
-HARD BLOCKERS AND ROUTING
+HARD BLOCKERS
 - Set hard_blocker=true only for a clearly unmet mandatory eligibility requirement or a strict location constraint explicitly defined in the request. Give a short evidence-based reason.
 - Do not label a preferred qualification, ambiguous title, or missing fact as a hard blocker.
 - Return a fit tier: strong_fit, possible_fit, weak_fit, or insufficient_information. These tiers describe evidence-based fit, not hiring probability.
-- The application, not you, decides the final Backlog/Deleted route from score, hard_blocker, and the configured routing policy. Never silently discard a job.
+- This feature only ranks jobs for display. Do not route, move, archive, close, delete, or otherwise act on a job. The application displays the top 30 in score order and uses hard_blocker only to break ties.
 
 EVIDENCE AND EXPLANATIONS
 - Return a brief plain-language summary, up to 3 concrete strengths, up to 3 concrete gaps/unknowns, and up to 3 short evidence records.
@@ -61,7 +61,7 @@ Supply the candidate profile and routing settings as structured data, and pass t
 
 ```json
 {
-  "prompt_version": "job-fit-v1",
+"prompt_version": "job-fit-rank-v2",
   "candidate": {
     "circumstances": "Recently admitted lawyer in Australia; completed PLT.",
     "admission_status": "admitted",
@@ -74,63 +74,43 @@ Supply the candidate profile and routing settings as structured data, and pass t
     "work_preferences": [],
     "resume_summary": null
   },
-  "routing_policy": {
-    "delete_below_score": 35,
-    "hard_blockers_route_to_deleted": true,
-    "otherwise_route_to_backlog": true
-  },
   "jobs": [
     {
       "job_id": "stable-database-id",
       "title": "Graduate Lawyer",
       "company": "Example Legal",
       "location": "Perth, WA",
-      "description": "Full scraped description, or null if unavailable",
-      "posted_at": "2026-10-20",
-      "source_urls": ["https://example.test/job"]
+      "description": "Scraped description, truncated to 12,000 characters, or null if unavailable",
+      "posted_at": "2026-10-20"
     }
   ]
 }
 ```
 
-The runtime must delimit and serialize these fields as data. Never concatenate untrusted descriptions into the developer instruction. The optional resume should be reduced to the minimum relevant facts needed for matching; do not send a full resume unless the user has explicitly chosen that storage and processing arrangement.
+The runtime sends these fields as serialized user data, separate from the developer instruction. Never concatenate untrusted descriptions into the developer instruction. The app stores an optional resume summary locally and sends it only when the user explicitly starts AI ranking. It does not send source URLs.
 
-## Ranking, routing, and saved assessments
+## Ranking and saved assessments
 
-The score is an absolute rubric score. Sort eligible Backlog results by score descending, then posting date descending when available, then stable database ID for deterministic ordering. Apply the same rubric to every job; batch composition must not change a score.
-
-Have application code compute the route, for example:
-
-```text
-if hard_blockers_route_to_deleted and hard_blocker:
-    route = deleted
-elif score < delete_below_score:
-    route = deleted
-else:
-    route = backlog
-```
-
-Keep the complete raw listing in the existing Deleted/raw archive regardless of its route. Routing should set a view/status that lets suitable jobs appear in Backlog; it should not physically erase low-scoring jobs. Preserve a user's manual status and override. Source-availability checks and database reset controls are separate from AI scoring; an AI score must not invoke either. Source checks remove only listings clearly confirmed expired by the board, while blocked or ambiguous checks retain the listing.
+The score is an absolute rubric score. The application orders jobs by score descending, then puts jobs without a confirmed hard blocker first when scores tie, then uses posting date and stable database ID for deterministic ordering. Apply the same rubric to every job; batch composition must not change a score. The app displays the top 30 assessed jobs in a separate view and never changes their current lists, statuses, or deletion state.
 
 Persist each successful assessment alongside the job, with at least:
 
 - `job_id`, score, tier, confidence, hard-blocker flag, summary, strengths, gaps, and evidence
 - model identifier, prompt version, rubric/configuration version, assessment timestamp
-- hash of the normalized job content and hash of the candidate profile/settings used
-- route and whether the user manually overrode it
+- hash of the normalized job content and hash of the candidate profile and allowed locations used
 
-Reuse a saved assessment only while its job-content hash, profile/settings hash, prompt version, rubric version, and model policy remain current. Reassess when any of those change, or when the user explicitly requests a recheck. New jobs need one assessment. Store results per job and commit each completed batch so an interrupted run can resume. Validate IDs, required fields, enum values, and score bounds in application code before writing; reject incomplete or malformed batches without overwriting prior valid assessments. Keep an audit trail for user overrides.
+Reuse a saved assessment only while its job-content hash, profile/settings hash, prompt version, rubric version, and model identifier remain current. Reassess when any of those change. New jobs need one assessment. Store results per job and commit each completed batch so an interrupted run can resume. Validate IDs, required fields, enum values, and score bounds in application code before writing; reject incomplete or malformed batches without overwriting prior valid assessments. This feature does not change user statuses or routes.
 
 Do not put API credentials in browser code, prompts, README examples, or source control. If an external model is added later, call it only from the server, make the external processing and cost clear to the user, and minimize the candidate/job data sent. Pin the chosen model and prompt version, and measure latency/cost on representative batch sizes before deciding the batch size.
 
-## Evaluation cases before enabling automatic routing
+## Evaluation cases for ranking quality
 
-Keep a small labeled set and run it whenever the prompt, model, rubric, or routing threshold changes. Compare expected hard-blocker decisions, score ranges, confidence, evidence quality, and JSON/schema validity.
+Keep a small labeled set and review it whenever the prompt, model, or rubric changes. Compare expected hard-blocker decisions, score ranges, confidence, evidence quality, and JSON/schema validity.
 
 | Case | Input signal | Expected behavior |
 | --- | --- | --- |
 | Graduate role | Graduate/junior duties, 0–1 year required, allowed city | Likely strong/possible fit; no hard blocker |
-| Mandatory senior PQE | “5+ years PQE required” with candidate max 1 | Hard blocker; route Deleted under stated policy |
+| Mandatory senior PQE | “5+ years PQE required” with candidate max 1 | Hard blocker and a substantially lower score than an attainable junior role |
 | Preferred senior PQE | “5+ years preferred” with candidate max 1 | Not a hard blocker; score for other evidence and state the gap |
 | Ambiguous Associate | Associate title, junior duties and no high PQE requirement | Assess duties/requirements; title alone does not exclude |
 | Missing description | Title/company/location only | Low confidence, insufficient information; do not invent gaps |

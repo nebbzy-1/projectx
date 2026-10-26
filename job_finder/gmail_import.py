@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import base64
 import os
@@ -15,15 +15,15 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+from .env import get_env
 from .database import (
     get_metadata,
     job_fingerprint,
     job_match_key,
     normalize_url,
     set_metadata,
-    upsert_jobs,
+    upsert_jobs_with_ids,
 )
-from .smart_filter import classify_job
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -61,10 +61,11 @@ class GmailSyncSummary:
     jobs_existing: int
     messages_without_jobs: int
     messages_without_body: int
+    new_job_ids: list[int] = field(default_factory=list)
 
 
 def gmail_client_configured() -> bool:
-    return GMAIL_CLIENT_PATH.is_file()
+    return bool(get_env("GOOGLE_CLIENT_ID") and get_env("GOOGLE_CLIENT_SECRET")) or GMAIL_CLIENT_PATH.is_file()
 
 
 def gmail_connected() -> bool:
@@ -85,11 +86,34 @@ def _save_token(credentials: Credentials) -> None:
 def authorize_gmail() -> Credentials:
     if not gmail_client_configured():
         raise GmailSetupError(
-            "Add your Google OAuth client file at data/gmail_oauth_client.json first."
+            "Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to the project .env file first."
         )
-    flow = InstalledAppFlow.from_client_secrets_file(
-        str(GMAIL_CLIENT_PATH), scopes=GMAIL_SCOPES
-    )
+    client_id = get_env("GOOGLE_CLIENT_ID")
+    client_secret = get_env("GOOGLE_CLIENT_SECRET")
+    if client_id and client_secret:
+        redirect_uris = [
+            uri.strip() for uri in get_env("GOOGLE_REDIRECT_URIS", "http://localhost").split(",")
+            if uri.strip()
+        ] or ["http://localhost"]
+        client_config = {
+            "installed": {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "project_id": get_env("GOOGLE_PROJECT_ID"),
+                "auth_uri": get_env("GOOGLE_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
+                "token_uri": get_env("GOOGLE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+                "auth_provider_x509_cert_url": get_env(
+                    "GOOGLE_AUTH_PROVIDER_X509_CERT_URL",
+                    "https://www.googleapis.com/oauth2/v1/certs",
+                ),
+                "redirect_uris": redirect_uris,
+            }
+        }
+        flow = InstalledAppFlow.from_client_config(client_config, scopes=GMAIL_SCOPES)
+    else:
+        flow = InstalledAppFlow.from_client_secrets_file(
+            str(GMAIL_CLIENT_PATH), scopes=GMAIL_SCOPES
+        )
     credentials = flow.run_local_server(port=0, open_browser=True)
     _save_token(credentials)
     return credentials
@@ -453,11 +477,11 @@ def extract_seek_jobs(html_body: str, plain_body: str, received_at: datetime) ->
 
 def _merge_duplicate_job_state(connection, source_job_id: int, target_job_id: int) -> None:
     source = connection.execute(
-        "SELECT status, notes, fit_status, fit_reason, fit_override FROM jobs WHERE id = ?",
+        "SELECT status, notes FROM jobs WHERE id = ?",
         (source_job_id,),
     ).fetchone()
     target = connection.execute(
-        "SELECT status, notes, fit_status, fit_reason, fit_override FROM jobs WHERE id = ?",
+        "SELECT status, notes FROM jobs WHERE id = ?",
         (target_job_id,),
     ).fetchone()
     if not source or not target:
@@ -476,15 +500,9 @@ def _merge_duplicate_job_state(connection, source_job_id: int, target_job_id: in
         merged_notes = f"{target_notes}\n\n{source_notes}"
     else:
         merged_notes = target_notes or source_notes
-    if target["fit_override"]:
-        fit_status, fit_reason, fit_override = target["fit_status"], target["fit_reason"], 1
-    else:
-        fit_status = source["fit_status"] if source["fit_override"] else target["fit_status"]
-        fit_reason = source["fit_reason"] if source["fit_override"] else target["fit_reason"]
-        fit_override = source["fit_override"] or target["fit_override"]
     connection.execute(
-        "UPDATE jobs SET status = ?, notes = ?, fit_status = ?, fit_reason = ?, fit_override = ? WHERE id = ?",
-        (target_status, merged_notes, fit_status, fit_reason, fit_override, target_job_id),
+        "UPDATE jobs SET status = ?, notes = ? WHERE id = ?",
+        (target_status, merged_notes, target_job_id),
     )
 
     source_latest = connection.execute(
@@ -510,7 +528,7 @@ def _merge_duplicate_job_state(connection, source_job_id: int, target_job_id: in
             )
 
 
-def _upsert_seek_jobs(connection, jobs: list[dict]) -> tuple[int, int]:
+def _upsert_seek_jobs(connection, jobs: list[dict]) -> tuple[int, int, list[int]]:
     """Upsert SEEK listings, repairing records made by the earlier bad parser."""
     unique_jobs: dict[str, dict] = {}
     for job in jobs:
@@ -562,6 +580,7 @@ def _upsert_seek_jobs(connection, jobs: list[dict]) -> tuple[int, int]:
             )
 
     added = existing = 0
+    added_ids: list[int] = []
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for url, job in unique_jobs.items():
         key = job_match_key(job)
@@ -599,9 +618,7 @@ def _upsert_seek_jobs(connection, jobs: list[dict]) -> tuple[int, int]:
                 connection.execute(
                     "UPDATE jobs SET fingerprint = ?, match_key = ?, title = ?, "
                     "company = ?, location = ?, source = 'seek', url = ?, description = ?, "
-                    "date_posted = COALESCE(?, date_posted), last_seen = ?, "
-                    "fit_status = CASE WHEN fit_override = 1 THEN fit_status ELSE ? END, "
-                    "fit_reason = CASE WHEN fit_override = 1 THEN fit_reason ELSE ? END "
+                    "date_posted = COALESCE(?, date_posted), last_seen = ? "
                     "WHERE id = ?",
                     (
                         fingerprint,
@@ -613,8 +630,6 @@ def _upsert_seek_jobs(connection, jobs: list[dict]) -> tuple[int, int]:
                         job.get("description"),
                         job.get("date_posted"),
                         now,
-                        job.get("fit_status") or "review",
-                        job.get("fit_reason") or "",
                         old_job_id,
                     ),
                 )
@@ -630,19 +645,20 @@ def _upsert_seek_jobs(connection, jobs: list[dict]) -> tuple[int, int]:
             connection.execute(
                 "DELETE FROM job_sources WHERE source = 'seek' AND url = ?", (url,)
             )
-        new_count, _ = upsert_jobs(connection, [job])
+        new_count, _, new_ids = upsert_jobs_with_ids(connection, [job])
         if new_count:
             added += 1
+            added_ids.extend(new_ids)
         else:
             existing += 1
     connection.commit()
-    return added, existing
+    return added, existing, added_ids
 
 
 def _remove_seek_alert_ctas(connection) -> int:
     """Remove imported alert buttons that the earlier parser treated as jobs."""
     rows = connection.execute(
-        """SELECT DISTINCT j.id, j.status, j.notes, j.fit_override
+        """SELECT DISTINCT j.id, j.status, j.notes
            FROM jobs j JOIN job_sources s ON s.job_id = j.id
            WHERE s.source = 'seek' AND lower(trim(j.title)) IN (
                'take your next career step', 'view all matching jobs', 'explore now',
@@ -657,7 +673,7 @@ def _remove_seek_alert_ctas(connection) -> int:
         ).fetchone()[0]
         if remaining:
             continue
-        if row["status"] == "new" and not str(row["notes"] or "").strip() and not row["fit_override"]:
+        if row["status"] == "new" and not str(row["notes"] or "").strip():
             connection.execute("DELETE FROM jobs WHERE id = ?", (row["id"],))
             removed += 1
         else:
@@ -717,7 +733,6 @@ def sync_seek_alerts(connection, config: dict) -> GmailSyncSummary:
             break
     pending = [message for message in messages if message["id"] not in processed]
     jobs_found = no_jobs = no_body = done = 0
-    profile = config.get("candidate_profile", {})
     all_jobs: list[dict] = []
     imported_records: list[tuple[dict, dict, datetime, int]] = []
     for summary in pending:
@@ -745,17 +760,17 @@ def sync_seek_alerts(connection, config: dict) -> GmailSyncSummary:
         if not plain.strip() and not html.strip():
             no_body += 1
         jobs = extract_seek_jobs(html, plain, received_at)
-        assessed = [{**job, **classify_job(job, profile)} for job in jobs]
-        if assessed:
-            jobs_found += len(assessed)
-            all_jobs.extend(assessed)
+        if jobs:
+            jobs_found += len(jobs)
+            all_jobs.extend(jobs)
         else:
             no_jobs += 1
-        imported_records.append((message, headers, received_at, len(assessed)))
+        imported_records.append((message, headers, received_at, len(jobs)))
 
     jobs_added = jobs_existing = 0
+    new_job_ids: list[int] = []
     if all_jobs:
-        jobs_added, jobs_existing = _upsert_seek_jobs(connection, all_jobs)
+        jobs_added, jobs_existing, new_job_ids = _upsert_seek_jobs(connection, all_jobs)
         _remove_seek_alert_ctas(connection)
 
     for message, headers, received_at, found_count in imported_records:
@@ -783,7 +798,9 @@ def sync_seek_alerts(connection, config: dict) -> GmailSyncSummary:
         )
         connection.commit()
         done += 1
-    return GmailSyncSummary(len(messages), done, jobs_found, jobs_added, jobs_existing, no_jobs, no_body)
+    return GmailSyncSummary(
+        len(messages), done, jobs_found, jobs_added, jobs_existing, no_jobs, no_body, new_job_ids
+    )
 
 
 def trash_stale_imported_alerts(connection, stale_after_days: int) -> tuple[int, int]:

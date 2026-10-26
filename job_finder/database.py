@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 STATUSES = ("new", "saved", "applied", "interviewing", "rejected", "closed")
-LATEST_LIMIT = 26
+LATEST_LIMIT = 30
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -32,10 +32,7 @@ def connect(path: Path) -> sqlite3.Connection:
             first_seen TEXT NOT NULL,
             last_seen TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'new',
-            notes TEXT NOT NULL DEFAULT '',
-            fit_status TEXT NOT NULL DEFAULT 'review',
-            fit_reason TEXT NOT NULL DEFAULT '',
-            fit_override INTEGER NOT NULL DEFAULT 0
+            notes TEXT NOT NULL DEFAULT ''
         )
         """
     )
@@ -43,12 +40,11 @@ def connect(path: Path) -> sqlite3.Connection:
     needs_match_key_backfill = "match_key" not in columns
     if needs_match_key_backfill:
         connection.execute("ALTER TABLE jobs ADD COLUMN match_key TEXT")
-    if "fit_status" not in columns:
-        connection.execute("ALTER TABLE jobs ADD COLUMN fit_status TEXT NOT NULL DEFAULT 'review'")
-    if "fit_reason" not in columns:
-        connection.execute("ALTER TABLE jobs ADD COLUMN fit_reason TEXT NOT NULL DEFAULT ''")
-    if "fit_override" not in columns:
-        connection.execute("ALTER TABLE jobs ADD COLUMN fit_override INTEGER NOT NULL DEFAULT 0")
+    # Remove the old local-fit metadata while preserving all saved job records.
+    if sqlite3.sqlite_version_info >= (3, 35, 0):
+        for obsolete_column in ("fit_status", "fit_reason", "fit_override"):
+            if obsolete_column in columns:
+                connection.execute(f"ALTER TABLE jobs DROP COLUMN {obsolete_column}")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS job_sources (
@@ -85,6 +81,29 @@ def connect(path: Path) -> sqlite3.Connection:
             added_at TEXT NOT NULL,
             is_new INTEGER NOT NULL DEFAULT 0
         )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS ai_job_assessments (
+            job_id INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+            score INTEGER NOT NULL CHECK(score BETWEEN 0 AND 100),
+            tier TEXT NOT NULL,
+            confidence TEXT NOT NULL,
+            hard_blocker INTEGER NOT NULL DEFAULT 0,
+            summary TEXT NOT NULL,
+            strengths_json TEXT NOT NULL DEFAULT '[]',
+            gaps_json TEXT NOT NULL DEFAULT '[]',
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            model TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            rubric_version TEXT NOT NULL,
+            job_hash TEXT NOT NULL,
+            profile_hash TEXT NOT NULL,
+            assessed_at TEXT NOT NULL
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_job_assessments_rank "
+        "ON ai_job_assessments(score DESC, hard_blocker ASC, assessed_at DESC)"
     )
     # Backfill the original single-source records and canonical match keys.
     migration_done = connection.execute(
@@ -228,8 +247,8 @@ def upsert_jobs_with_ids(connection: sqlite3.Connection, jobs: list[dict]) -> tu
             connection.execute(
                 """INSERT INTO jobs
                 (fingerprint, match_key, title, company, location, source, url, description,
-                 date_posted, first_seen, last_seen, fit_status, fit_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 date_posted, first_seen, last_seen)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     fingerprint,
                     match_key or None,
@@ -242,8 +261,6 @@ def upsert_jobs_with_ids(connection: sqlite3.Connection, jobs: list[dict]) -> tu
                     str(job.get("date_posted") or "") or None,
                     now,
                     now,
-                    str(job.get("fit_status") or "review"),
-                    str(job.get("fit_reason") or ""),
                 ),
             )
             job_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -253,17 +270,13 @@ def upsert_jobs_with_ids(connection: sqlite3.Connection, jobs: list[dict]) -> tu
             job_id = existing["id"]
             connection.execute(
                 """UPDATE jobs SET last_seen = ?, description = COALESCE(?, description),
-                   date_posted = COALESCE(date_posted, ?), match_key = COALESCE(match_key, ?),
-                   fit_status = CASE WHEN fit_override = 1 THEN fit_status ELSE ? END,
-                   fit_reason = CASE WHEN fit_override = 1 THEN fit_reason ELSE ? END
+                   date_posted = COALESCE(date_posted, ?), match_key = COALESCE(match_key, ?)
                    WHERE id = ?""",
                 (
                     now,
                     job.get("description"),
                     str(job.get("date_posted") or "") or None,
                     match_key or None,
-                    str(job.get("fit_status") or "review"),
-                    str(job.get("fit_reason") or ""),
                     job_id,
                 ),
             )
@@ -314,12 +327,11 @@ def _tab_clauses(
         clauses.append("(j.title LIKE ? OR j.company LIKE ? OR j.location LIKE ?)")
         values.extend((pattern, pattern, pattern))
     if tab == "backlog":
-        clauses.extend(("j.status IN ('new', 'saved')", "COALESCE(j.fit_status, 'review') != 'skip'"))
+        clauses.append("j.status IN ('new', 'saved')")
         from_clause = "jobs j"
         order = "j.first_seen DESC"
     elif tab == "deleted":
-        # Deleted is the raw search archive: keep every fetched listing visible
-        # here, including rows routed to Backlog or Applied after filtering.
+        # Deleted is the raw search archive; listings can also appear in other tabs.
         from_clause = "jobs j"
         order = "j.first_seen DESC"
     elif tab == "applied":
@@ -329,8 +341,6 @@ def _tab_clauses(
     else:
         from_clause = "latest_jobs l JOIN jobs j ON j.id = l.job_id"
         order = "l.added_at DESC, l.id DESC"
-    if tab == "latest":
-        clauses.append("COALESCE(j.fit_status, 'review') != 'skip'")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return where, values, from_clause, order
 
@@ -346,7 +356,7 @@ def _tab_query(
     where, values, from_clause, order = _tab_clauses(tab, location, query)
     return connection.execute(
         f"SELECT j.id, j.title, j.company, j.location, j.source, j.url, j.description, j.date_posted, "
-        f"j.first_seen, j.last_seen, j.status, j.notes, j.fit_status, j.fit_reason, j.fit_override, "
+        f"j.first_seen, j.last_seen, j.status, j.notes, "
         f"{'l.is_new' if tab == 'latest' else '0'} AS latest_new "
         f"FROM {from_clause} {where} ORDER BY {order} LIMIT ? OFFSET ?",
         [*values, limit, offset],
@@ -400,7 +410,13 @@ def clear_job_database(connection: sqlite3.Connection) -> None:
     connection.commit()
 
 
-def save_latest_jobs(connection: sqlite3.Connection, job_ids: list[int], refreshed_at: str) -> None:
+def save_latest_jobs(
+    connection: sqlite3.Connection,
+    job_ids: list[int],
+    refreshed_at: str,
+    *,
+    update_refresh_time: bool = True,
+) -> None:
     connection.execute("UPDATE latest_jobs SET is_new = 0")
     for job_id in job_ids:
         connection.execute(
@@ -413,11 +429,12 @@ def save_latest_jobs(connection: sqlite3.Connection, job_ids: list[int], refresh
         "(SELECT id FROM latest_jobs ORDER BY added_at DESC, id DESC LIMIT ?)",
         (LATEST_LIMIT,),
     )
-    connection.execute(
-        "INSERT INTO app_metadata(key, value) VALUES ('last_latest_refresh_at', ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (refreshed_at,),
-    )
+    if update_refresh_time:
+        connection.execute(
+            "INSERT INTO app_metadata(key, value) VALUES ('last_latest_refresh_at', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (refreshed_at,),
+        )
     connection.commit()
 
 
@@ -429,15 +446,5 @@ def set_status(connection: sqlite3.Connection, job_id: int, status: str) -> bool
 
 def set_note(connection: sqlite3.Connection, job_id: int, note: str) -> bool:
     result = connection.execute("UPDATE jobs SET notes = ? WHERE id = ?", (note, job_id))
-    connection.commit()
-    return result.rowcount > 0
-
-
-def restore_job_to_backlog(connection: sqlite3.Connection, job_id: int) -> bool:
-    result = connection.execute(
-        "UPDATE jobs SET fit_status = 'review', fit_reason = 'Manually restored from Deleted.', fit_override = 1 "
-        "WHERE id = ? AND fit_status = 'skip' AND status IN ('new', 'saved')",
-        (job_id,),
-    )
     connection.commit()
     return result.rowcount > 0
