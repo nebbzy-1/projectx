@@ -77,7 +77,7 @@ Use **Reset job search → Full reset** in the UI to clear saved jobs, statuses,
 rm -f data/jobs.sqlite3 data/jobs.sqlite3-shm data/jobs.sqlite3-wal
 ```
 
-The next launch creates a new database and runs the initial import. The database file is tracked by Git in this repository; don't commit personal job data.
+The next launch creates a new database and runs the initial import. The local database is ignored by Git because it can contain personal job and Gmail metadata. Keep it on your machine and don't commit or share it.
 
 The AI ranking profile is stored separately and remains when the database is cleared. Remove it too only if you want to reset your profile:
 
