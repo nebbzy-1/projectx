@@ -9,7 +9,7 @@ from html.parser import HTMLParser
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
-from .config import DATABASE_PATH, load_search_config
+from .config import DATABASE_PATH, load_search_config, save_web_search_settings
 from .database import (
     APPLICATION_STATUSES,
     JOB_BUCKETS,
@@ -93,6 +93,34 @@ def _plain_description(value: object) -> str:
     parser.close()
     lines = [line.strip() for line in "".join(parser.parts).splitlines()]
     return "\n".join(line for line in lines if line)
+
+
+def _form_lines(value: str, label: str) -> list[str]:
+    entries = []
+    seen = set()
+    for line in str(value or "").splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        if len(item) > 160:
+            raise ValueError(f"Keep each {label} under 160 characters.")
+        key = item.casefold()
+        if key not in seen:
+            seen.add(key)
+            entries.append(item)
+    if not entries:
+        raise ValueError(f"Add at least one {label}.")
+    if len(entries) > 100:
+        raise ValueError(f"Enter no more than 100 {label}.")
+    return entries
+
+
+def _normalize_web_search_settings(form) -> dict[str, Any]:
+    titles = _form_lines(form.get("titles", ""), "job titles")
+    locations = _form_lines(form.get("locations", ""), "locations")
+    if len(titles) * len(locations) > 100:
+        raise ValueError("Use no more than 100 job title and location combinations.")
+    return {"titles": titles, "locations": locations}
 
 
 class SearchController:
@@ -412,6 +440,24 @@ class SearchController:
             self._state.update(
                 task="done",
                 message="AI ranking profile saved. Existing rankings will refresh the next time you run Prioritize top 30.",
+                error=False,
+                progress=None,
+                details=[],
+                preview_token=None,
+                requires_confirmation=False,
+                event_id=self._state["event_id"] + 1,
+            )
+            return True
+
+    def update_search_settings(self, settings: dict[str, Any]) -> bool:
+        with self._lock:
+            if self._state["task"] in self.ACTIVE_TASKS:
+                return False
+            save_web_search_settings(settings)
+            self.config.update(settings)
+            self._state.update(
+                task="idle",
+                message="Your saved jobs are ready.",
                 error=False,
                 progress=None,
                 details=[],
@@ -775,12 +821,16 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
                 "titles": list(search_config.get("titles", [])),
                 "locations": list(search_config.get("locations", [])),
                 "sites": list(search_config.get("sites", [])),
-                "results_per_site": dict(search_config.get("results_per_site", {})),
+                "results_per_site": {
+                    site: int(search_config.get("results_per_site", {}).get(site, 25))
+                    for site in ("indeed", "glassdoor")
+                },
                 "hours_old": search_config.get("hours_old", 24),
                 "check_results_total": search_config.get("check_results_total", 1500),
                 "initial_results_per_title_location": search_config.get(
                     "initial_results_per_title_location", 250
                 ),
+                "initial_import_enabled": search_config.get("initial_import_enabled", False),
                 "gmail_query": search_config.get("gmail_query", "label:SEEK"),
                 "gmail_max_messages": search_config.get("gmail_max_messages", 250),
                 "ai_model": search_config.get("ai_model", "gpt-6-luna"),
@@ -880,10 +930,13 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
     @app.post("/profile")
     def update_profile():
         try:
+            saved_profile = controller.config.get("candidate_profile", {})
             updated = controller.update_candidate_profile(
                 {
                     "circumstances": request.form.get("circumstances", ""),
-                    "max_required_pqe": request.form.get("max_required_pqe", "1"),
+                    "max_required_pqe": request.form.get(
+                        "max_required_pqe", saved_profile.get("max_required_pqe", "1")
+                    ),
                     "resume_summary": request.form.get("resume_summary", ""),
                 }
             )
@@ -894,6 +947,23 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
                 flash("AI ranking profile saved. Existing rankings will update the next time you run Prioritize top 30.", "success")
             else:
                 flash("Wait for the current search to finish before changing the AI ranking profile.", "error")
+        return redirect(url_for("index", tab="profile"))
+
+    @app.post("/profile/search-settings")
+    def update_search_settings():
+        try:
+            settings = _normalize_web_search_settings(request.form)
+            updated = controller.update_search_settings(settings)
+        except (ValueError, OSError) as error:
+            flash(str(error), "error")
+        else:
+            if updated:
+                flash(
+                    "Search titles and locations saved. They apply to the next search; run a partial reset to refill the initial job pool.",
+                    "success",
+                )
+            else:
+                flash("Wait for the current search or refresh to finish before changing search setup.", "error")
         return redirect(url_for("index", tab="profile"))
 
     @app.post("/ai/api-key")

@@ -106,7 +106,7 @@
         <div class="profile-card profile-editor">
           <div class="profile-card-heading">
             <span class="settings-icon">◎</span>
-            <div><h2>Your candidate profile</h2><p>These details help the prioritizer judge whether a role suits you.</p></div>
+            <div><h2>Your AI job-fit profile</h2><p>The current prioritizer reads this saved profile. The planned backlog filter can use the same criteria.</p></div>
           </div>
           <form class="profile-form profile-page-form" action="{{ url_for('update_profile') }}" method="post">
             <label for="candidateCircumstances">Your circumstances</label>
@@ -114,58 +114,40 @@
             <label for="candidateResume">Optional resume summary</label>
             <textarea id="candidateResume" name="resume_summary" maxlength="8000" rows="5" placeholder="Summarize experience, skills, education, and practice areas. Avoid adding contact details you do not want sent for AI ranking.">{{ candidate_profile.resume_summary }}</textarea>
             <div class="profile-controls">
-              <label class="pqe-control" for="maxRequiredPqe">Maximum required PQE to consider
-                <span><input id="maxRequiredPqe" type="number" name="max_required_pqe" min="0" max="30" step="0.5" value="{{ candidate_profile.max_required_pqe }}"> years</span>
-              </label>
               <button class="save-button" type="submit">Save profile</button>
             </div>
-            <p class="settings-note">Saved locally in <code>data/candidate_profile.json</code>. AI ranking uses this information only when you choose to run it.</p>
           </form>
         </div>
 
         <section class="profile-card search-config-card">
           <div class="profile-card-heading">
             <span class="settings-icon">⌕</span>
-            <div><h2>Search setup</h2><p>Current defaults from <code>config.toml</code>. Edit that file to change these settings.</p></div>
+            <div><h2>Search setup</h2><p>Only job titles and locations are editable here. The search sources and limits stay at their defaults.</p></div>
           </div>
-          <div class="search-config-grid">
-            <div class="config-detail config-detail-wide">
-              <strong>Job titles <span>{{ search_settings.titles|length }}</span></strong>
-              <div class="config-chips">{% for title in search_settings.titles %}<span>{{ title }}</span>{% endfor %}</div>
+          <form class="profile-form search-settings-form" action="{{ url_for('update_search_settings') }}" method="post">
+            <div class="search-settings-lists">
+              <div class="search-setting-field">
+                <label for="searchTitles">Job titles <small>One title per line · {{ search_settings.titles|length }} configured</small></label>
+                <textarea id="searchTitles" name="titles" rows="5" required>{% for title in search_settings.titles %}{{ title }}{% if not loop.last %}&#10;{% endif %}{% endfor %}</textarea>
+              </div>
+              <div class="search-setting-field">
+                <label for="searchLocations">Locations <small>One location per line · {{ search_settings.locations|length }} configured</small></label>
+                <textarea id="searchLocations" name="locations" rows="5" required>{% for value in search_settings.locations %}{{ value }}{% if not loop.last %}&#10;{% endif %}{% endfor %}</textarea>
+              </div>
             </div>
-            <div class="config-detail config-detail-wide">
-              <strong>Locations <span>{{ search_settings.locations|length }}</span></strong>
-              <div class="config-chips">{% for value in search_settings.locations %}<span>{{ value }}</span>{% endfor %}</div>
+
+            <div class="search-settings-grid">
+              <div class="config-detail">
+                <strong>Indeed and Glassdoor sources</strong>
+                <p>Indeed · Glassdoor<br>SEEK is imported separately from Gmail alerts.</p>
+              </div>
             </div>
-            <div class="config-detail">
-              <strong>Job boards</strong>
-              <div class="config-chips">{% for site in search_settings.sites %}<span>{{ site|title }}</span>{% endfor %}</div>
+
+            <div class="search-settings-actions">
+              <p>Search limits above are fixed at their defaults. Up to 100 job title and location combinations are allowed.</p>
+              <button class="save-button" type="submit">Save titles and locations</button>
             </div>
-            <div class="config-detail">
-              <strong>Default results per board</strong>
-              <div class="config-chips">{% for site, cap in search_settings.results_per_site.items() %}<span>{{ site|title }} · {{ cap }}</span>{% endfor %}</div>
-            </div>
-            <div class="config-detail">
-              <strong>Recent search window</strong>
-              <p>At least {{ search_settings.hours_old }} hours, widened to cover time since the last successful check.</p>
-            </div>
-            <div class="config-detail">
-              <strong>Check listings request cap</strong>
-              <p>Up to {{ search_settings.check_results_total }} Indeed/Glassdoor results total.</p>
-            </div>
-            <div class="config-detail">
-              <strong>First search cap</strong>
-              <p>Up to {{ search_settings.initial_results_per_title_location }} results per title and location pair across enabled boards.</p>
-            </div>
-            <div class="config-detail">
-              <strong>SEEK email search</strong>
-              <p><code>{{ search_settings.gmail_query }}</code> · checks up to {{ search_settings.gmail_max_messages }} labelled messages.</p>
-            </div>
-            <div class="config-detail">
-              <strong>AI prioritizer</strong>
-              <p>{{ search_settings.ai_model }} · {{ search_settings.ai_batch_size }} jobs per request batch.</p>
-            </div>
-          </div>
+          </form>
         </section>
       </section>
       {% else %}
