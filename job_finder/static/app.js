@@ -13,6 +13,7 @@
   const retryForm = document.getElementById("retryForm");
   const resetButtons = document.querySelectorAll(".reset-option");
   const checkListingsButton = document.getElementById("checkListingsButton");
+  let pollTimer = null;
 
   function updateStatus(state) {
     statusBox.dataset.task = state.task;
@@ -68,10 +69,19 @@
   async function poll() {
     try {
       const response = await fetch("/api/search-state", { headers: { Accept: "application/json" } });
-      if (response.ok) updateStatus(await response.json());
+      if (!response.ok) throw new Error("The local app status request failed.");
+      const state = await response.json();
+      updateStatus(state);
+      if (["idle", "done", "error"].includes(state.task)) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      } else if (!pollTimer) {
+        pollTimer = window.setInterval(poll, 1400);
+      }
     } catch (_error) {
       message.textContent = "The local app server could not be reached. Check the terminal where Job Finder is running.";
       statusBox.classList.add("error");
+      if (!pollTimer) pollTimer = window.setInterval(poll, 1400);
     }
   }
 
@@ -94,5 +104,4 @@
   });
 
   poll();
-  window.setInterval(poll, 1400);
 })();

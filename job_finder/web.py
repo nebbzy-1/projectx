@@ -140,6 +140,22 @@ class SearchController:
             )
             return state
 
+    def dismiss_completed_status(self) -> None:
+        """Clear a completed summary after the user switches job lists."""
+        with self._lock:
+            if self._state["task"] != "done":
+                return
+            self._state.update(
+                task="idle",
+                message="Your saved jobs are ready.",
+                error=False,
+                progress=None,
+                details=[],
+                preview_token=None,
+                requires_confirmation=False,
+                event_id=self._state["event_id"] + 1,
+            )
+
     def start_initial_import(self) -> bool:
         if not self.config["initial_import_enabled"]:
             return False
@@ -665,6 +681,8 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
         tab = request.args.get("tab", "backlog").casefold()
         if tab not in {"applied", "backlog", "latest", "prioritized", "deleted"}:
             tab = "backlog"
+        if request.args.get("dismiss_logs") == "1":
+            controller.dismiss_completed_status()
         location = request.args.get("location", "")
         valid_locations = {"", *search_config["locations"]}
         if location not in valid_locations:
