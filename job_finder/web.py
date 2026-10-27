@@ -679,7 +679,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
     @app.get("/")
     def index():
         tab = request.args.get("tab", "backlog").casefold()
-        if tab not in {"applied", "backlog", "latest", "prioritized", "deleted"}:
+        if tab not in {"applied", "backlog", "latest", "prioritized", "deleted", "profile"}:
             tab = "backlog"
         if request.args.get("dismiss_logs") == "1":
             controller.dismiss_completed_status()
@@ -702,7 +702,10 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
                 location=location,
                 query=query,
             )
-            if tab == "prioritized":
+            if tab == "profile":
+                total = 0
+                rows = []
+            elif tab == "prioritized":
                 total = priority_data["total"]
                 rows = priority_data["jobs"][(page - 1) * page_size:page * page_size]
             else:
@@ -761,12 +764,28 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
                 "applied": "Applied",
                 "backlog": "Backlog",
                 "deleted": "Deleted",
+                "profile": "Profile",
             },
             page=page,
             page_size=page_size,
             location=location,
             query=query,
             locations=search_config["locations"],
+            search_settings={
+                "titles": list(search_config.get("titles", [])),
+                "locations": list(search_config.get("locations", [])),
+                "sites": list(search_config.get("sites", [])),
+                "results_per_site": dict(search_config.get("results_per_site", {})),
+                "hours_old": search_config.get("hours_old", 24),
+                "check_results_total": search_config.get("check_results_total", 1500),
+                "initial_results_per_title_location": search_config.get(
+                    "initial_results_per_title_location", 250
+                ),
+                "gmail_query": search_config.get("gmail_query", "label:SEEK"),
+                "gmail_max_messages": search_config.get("gmail_max_messages", 250),
+                "ai_model": search_config.get("ai_model", "gpt-6-luna"),
+                "ai_batch_size": search_config.get("ai_batch_size", 10),
+            },
             job_buckets=JOB_BUCKETS,
             application_statuses=APPLICATION_STATUSES,
             search_state=controller.snapshot(),
@@ -850,7 +869,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
     @app.post("/backlog/refresh")
     def refresh_backlog():
         return_tab = request.form.get("return_tab", "backlog").casefold()
-        if return_tab not in {"latest", "prioritized", "applied", "backlog", "deleted"}:
+        if return_tab not in {"latest", "prioritized", "applied", "backlog", "deleted", "profile"}:
             return_tab = "backlog"
         if controller.start_listing_check():
             flash("Check listings started: Indeed, Glassdoor, SEEK email alerts, then an expiry check.", "success")
@@ -875,7 +894,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
                 flash("AI ranking profile saved. Existing rankings will update the next time you run Prioritize top 30.", "success")
             else:
                 flash("Wait for the current search to finish before changing the AI ranking profile.", "error")
-        return redirect(url_for("index", tab="prioritized"))
+        return redirect(url_for("index", tab="profile"))
 
     @app.post("/ai/api-key")
     def update_ai_api_key():
