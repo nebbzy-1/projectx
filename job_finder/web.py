@@ -11,18 +11,21 @@ from flask import Flask, flash, jsonify, redirect, render_template, request, url
 
 from .config import DATABASE_PATH, load_search_config
 from .database import (
+    APPLICATION_STATUSES,
+    JOB_BUCKETS,
+    JOB_PLACEMENTS,
     LATEST_LIMIT,
-    STATUSES,
     connect,
     count_tab_jobs,
     clear_job_database,
+    delete_deleted_jobs,
     get_metadata,
     latest_job_count,
     list_job_sources,
     list_tab_jobs,
     save_latest_jobs,
+    set_job_placement,
     set_note,
-    set_status,
 )
 from .runner import (
     INITIAL_IMPORT_KEY,
@@ -223,9 +226,8 @@ class SearchController:
             summary = run_initial_import(connection, self.config, progress=self._update_progress)
             self._seeded = not summary.errors
             backlog_count = count_tab_jobs(connection, "backlog")
-            deleted_count = count_tab_jobs(connection, "deleted")
             message = (
-                f"Full reset complete: {backlog_count} jobs in Backlog; {deleted_count} raw listings in Deleted."
+                f"Full reset complete: {backlog_count} jobs saved in Backlog."
                 if not summary.errors
                 else "The database was cleared and the fresh search had some errors. Retry the initial search to fill any gaps."
             )
@@ -252,17 +254,16 @@ class SearchController:
                 progress=self._update_progress,
             )
             backlog_count = count_tab_jobs(connection, "backlog")
-            deleted_count = count_tab_jobs(connection, "deleted")
         except Exception as error:
             self._finish_error(f"Initial import failed: {error}")
         else:
             with self._lock:
                 self._seeded = not summary.errors
                 message = (
-                    f"Partial import: {backlog_count} jobs in Backlog; {deleted_count} raw listings in Deleted. "
+                    f"Partial import: {backlog_count} jobs saved in Backlog. "
                     "Some searches failed; retry to finish the import."
                     if summary.errors
-                    else f"Initial import complete: {backlog_count} jobs in Backlog; {deleted_count} raw listings saved in Deleted."
+                    else f"Initial import complete: {backlog_count} jobs saved in Backlog."
                 )
                 self._state.update(
                     task="error" if summary.errors else "done",
@@ -705,6 +706,12 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             for row in rows:
                 job = dict(row)
                 job["latest_new"] = bool(job["latest_new"])
+                job["placement"] = (
+                    job["status"]
+                    if job["status"] in APPLICATION_STATUSES
+                    else job["list_bucket"]
+                )
+                job["manual_priority"] = job["list_bucket"] == "prioritized"
                 job["description_text"] = _plain_description(job.get("description"))
                 job["sources"] = [dict(source) for source in list_job_sources(connection, job["id"])]
                 grouped_sources = {}
@@ -742,7 +749,8 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             location=location,
             query=query,
             locations=search_config["locations"],
-            statuses=STATUSES,
+            job_buckets=JOB_BUCKETS,
+            application_statuses=APPLICATION_STATUSES,
             search_state=controller.snapshot(),
             latest_limit=LATEST_LIMIT,
             gmail_connected=gmail_connected(),
@@ -751,29 +759,43 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             ai_api_key_source=api_key_source(),
             ai_candidate_count=priority_data["candidate_count"],
             ai_pending_count=priority_data["pending_count"],
-            ai_ranked_count=priority_data["ranked_count"],
+            ai_ranked_count=priority_data["ai_ranked_count"],
+            manual_priority_count=priority_data["manual_priority_count"],
         )
 
     @app.post("/jobs/<int:job_id>")
     def update_job(job_id: int):
-        status = request.form.get("status", "")
+        placement = request.form.get("placement", "")
         notes = request.form.get("notes", "").strip()[:2000]
         tab = request.form.get("tab", "backlog")
         location = request.form.get("location", "")
         query = request.form.get("q", "")
         page = request.form.get("page", "1")
-        if status not in STATUSES:
-            flash("Choose a valid application status.", "error")
+        if placement not in JOB_PLACEMENTS:
+            flash("Choose Backlog, Prioritized, Deleted, or a valid application status.", "error")
             return redirect(url_for("index", tab=tab, location=location, q=query, page=page))
         connection = connect(database_path)
         try:
-            found = set_status(connection, job_id, status)
+            found = set_job_placement(connection, job_id, placement)
             if found:
                 set_note(connection, job_id, notes)
         finally:
             connection.close()
         flash("Job updated." if found else "That job could not be found.", "success" if found else "error")
         return redirect(url_for("index", tab=tab, location=location, q=query, page=page))
+
+    @app.post("/deleted/clear")
+    def clear_deleted():
+        if controller.snapshot()["busy"]:
+            flash("Wait for the current search or ranking to finish before clearing Deleted.", "error")
+            return redirect(url_for("index", tab="deleted"))
+        connection = connect(database_path)
+        try:
+            removed = delete_deleted_jobs(connection)
+        finally:
+            connection.close()
+        flash(f"Permanently removed {removed} job{'s' if removed != 1 else ''} from Deleted.", "success")
+        return redirect(url_for("index", tab="deleted"))
 
     @app.post("/latest/refresh")
     def refresh_latest():

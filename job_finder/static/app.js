@@ -11,7 +11,6 @@
   const progressFill = document.getElementById("progressFill");
   const progressLabel = document.getElementById("progressLabel");
   const retryForm = document.getElementById("retryForm");
-  const refreshButton = document.getElementById("refreshButton");
   const resetButtons = document.querySelectorAll(".reset-option");
   const checkListingsButton = document.getElementById("checkListingsButton");
 
@@ -35,7 +34,6 @@
       progressLabel.textContent = progress.label || `${progress.done} of ${progress.total}`;
     }
     if (retryForm) retryForm.hidden = !state.can_retry_seed;
-    if (refreshButton) refreshButton.disabled = Boolean(state.busy || state.can_retry_seed);
     resetButtons.forEach((button) => { button.disabled = Boolean(state.busy); });
     if (checkListingsButton) checkListingsButton.disabled = Boolean(state.busy);
 

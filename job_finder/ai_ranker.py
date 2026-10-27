@@ -107,8 +107,8 @@ def _job_hash(payload: dict) -> str:
 
 def _candidate_rows(connection) -> list[dict]:
     rows = connection.execute(
-        """SELECT id, title, company, location, description, date_posted, status
-           FROM jobs WHERE status IN ('new', 'saved') ORDER BY id"""
+        """SELECT id, title, company, location, description, date_posted, status, list_bucket
+           FROM jobs WHERE status IN ('new', 'saved') AND list_bucket != 'deleted' ORDER BY id"""
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -395,10 +395,12 @@ def prioritized_view_data(
         connection, candidates, profile_hash(profile, allowed_locations), model
     )
     candidate_by_id = {int(row["id"]): row for row in candidates}
-    prioritized: list[dict] = []
+    manually_prioritized: list[dict] = []
+    ai_prioritized: list[dict] = []
     for job_id, assessment in valid.items():
         row = candidate_by_id[job_id]
         item = dict(row)
+        item["manual_priority"] = row.get("list_bucket") == "prioritized"
         item.update(
             ai_score=int(assessment["score"]),
             ai_tier=assessment["tier"],
@@ -410,18 +412,33 @@ def prioritized_view_data(
             ai_evidence=json.loads(assessment["evidence_json"] or "[]"),
             ai_assessed_at=assessment["assessed_at"],
         )
-        prioritized.append(item)
+        (manually_prioritized if item["manual_priority"] else ai_prioritized).append(item)
 
-    prioritized.sort(
-        key=lambda item: (
-            item["ai_score"],
-            not item["ai_hard_blocker"],
-            str(item.get("date_posted") or ""),
-            -int(item["id"]),
-        ),
-        reverse=True,
+    score_order = lambda item: (
+        item.get("ai_score", -1),
+        not item.get("ai_hard_blocker", False),
+        str(item.get("date_posted") or ""),
+        -int(item["id"]),
     )
-    top = prioritized[:TOP_LIMIT]
+    manually_prioritized.extend(
+        {
+            **row,
+            "manual_priority": True,
+        }
+        for row in candidates
+        if row.get("list_bucket") == "prioritized" and int(row["id"]) not in valid
+    )
+    manually_prioritized.sort(key=score_order, reverse=True)
+    ai_prioritized.sort(key=score_order, reverse=True)
+    manual_ids = {int(item["id"]) for item in manually_prioritized}
+    ranked_count = min(len(manually_prioritized) + len(ai_prioritized), TOP_LIMIT)
+    top = manually_prioritized[:TOP_LIMIT]
+    if len(top) < TOP_LIMIT:
+        top.extend(
+            item for item in ai_prioritized
+            if int(item["id"]) not in manual_ids
+        )
+        top = top[:TOP_LIMIT]
     city = location.split(",", 1)[0].strip().casefold() if location else ""
     term = query.casefold().strip()
     if city:
@@ -434,7 +451,9 @@ def prioritized_view_data(
     return {
         "jobs": top,
         "total": len(top),
-        "ranked_count": min(len(prioritized), TOP_LIMIT),
+        "ranked_count": ranked_count,
+        "ai_ranked_count": min(len(valid), TOP_LIMIT),
+        "manual_priority_count": len(manually_prioritized),
         "candidate_count": len(candidates),
         "pending_count": len(pending),
         "assessed_count": len(valid),

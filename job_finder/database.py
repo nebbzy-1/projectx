@@ -9,6 +9,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 STATUSES = ("new", "saved", "applied", "interviewing", "rejected", "closed")
+JOB_BUCKETS = ("backlog", "prioritized", "deleted")
+APPLICATION_STATUSES = ("applied", "interviewing", "rejected", "closed")
+JOB_PLACEMENTS = (*JOB_BUCKETS, *APPLICATION_STATUSES)
 LATEST_LIMIT = 30
 
 
@@ -40,6 +43,12 @@ def connect(path: Path) -> sqlite3.Connection:
     needs_match_key_backfill = "match_key" not in columns
     if needs_match_key_backfill:
         connection.execute("ALTER TABLE jobs ADD COLUMN match_key TEXT")
+    if "list_bucket" not in columns:
+        # Older versions showed every job in Deleted as a raw archive. Keep
+        # those records, but place them in Backlog until the user moves them.
+        connection.execute(
+            "ALTER TABLE jobs ADD COLUMN list_bucket TEXT NOT NULL DEFAULT 'backlog'"
+        )
     # Remove the old local-fit metadata while preserving all saved job records.
     if sqlite3.sqlite_version_info >= (3, 35, 0):
         for obsolete_column in ("fit_status", "fit_reason", "fit_override"):
@@ -130,6 +139,9 @@ def connect(path: Path) -> sqlite3.Connection:
         )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_jobs_match_key ON jobs(match_key) WHERE match_key IS NOT NULL"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_list_bucket ON jobs(list_bucket, status)"
     )
     connection.commit()
     return connection
@@ -328,10 +340,12 @@ def _tab_clauses(
         values.extend((pattern, pattern, pattern))
     if tab == "backlog":
         clauses.append("j.status IN ('new', 'saved')")
+        clauses.append("j.list_bucket = 'backlog'")
         from_clause = "jobs j"
         order = "j.first_seen DESC"
     elif tab == "deleted":
-        # Deleted is the raw search archive; listings can also appear in other tabs.
+        clauses.append("j.status IN ('new', 'saved')")
+        clauses.append("j.list_bucket = 'deleted'")
         from_clause = "jobs j"
         order = "j.first_seen DESC"
     elif tab == "applied":
@@ -356,7 +370,7 @@ def _tab_query(
     where, values, from_clause, order = _tab_clauses(tab, location, query)
     return connection.execute(
         f"SELECT j.id, j.title, j.company, j.location, j.source, j.url, j.description, j.date_posted, "
-        f"j.first_seen, j.last_seen, j.status, j.notes, "
+        f"j.first_seen, j.last_seen, j.status, j.list_bucket, j.notes, "
         f"{'l.is_new' if tab == 'latest' else '0'} AS latest_new "
         f"FROM {from_clause} {where} ORDER BY {order} LIMIT ? OFFSET ?",
         [*values, limit, offset],
@@ -410,6 +424,13 @@ def clear_job_database(connection: sqlite3.Connection) -> None:
     connection.commit()
 
 
+def delete_deleted_jobs(connection: sqlite3.Connection) -> int:
+    """Permanently remove only jobs the user placed in Deleted."""
+    result = connection.execute("DELETE FROM jobs WHERE list_bucket = 'deleted'")
+    connection.commit()
+    return result.rowcount
+
+
 def save_latest_jobs(
     connection: sqlite3.Connection,
     job_ids: list[int],
@@ -439,7 +460,38 @@ def save_latest_jobs(
 
 
 def set_status(connection: sqlite3.Connection, job_id: int, status: str) -> bool:
-    result = connection.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
+    result = connection.execute(
+        """UPDATE jobs SET status = ?,
+           list_bucket = CASE WHEN list_bucket = 'deleted' THEN 'backlog' ELSE list_bucket END
+           WHERE id = ?""",
+        (status, job_id),
+    )
+    connection.commit()
+    return result.rowcount > 0
+
+
+def set_job_placement(connection: sqlite3.Connection, job_id: int, placement: str) -> bool:
+    """Move an open job between lists or update its application status."""
+    if placement not in JOB_PLACEMENTS:
+        raise ValueError(f"Unknown job placement: {placement}")
+
+    if placement in JOB_BUCKETS:
+        result = connection.execute(
+            """UPDATE jobs SET list_bucket = ?,
+               status = CASE WHEN status IN ('applied', 'interviewing', 'rejected', 'closed')
+                             THEN 'new' ELSE status END
+               WHERE id = ?""",
+            (placement, job_id),
+        )
+        if placement == "deleted" and result.rowcount:
+            connection.execute("DELETE FROM latest_jobs WHERE job_id = ?", (job_id,))
+    else:
+        result = connection.execute(
+            """UPDATE jobs SET status = ?,
+               list_bucket = CASE WHEN list_bucket = 'deleted' THEN 'backlog' ELSE list_bucket END
+               WHERE id = ?""",
+            (placement, job_id),
+        )
     connection.commit()
     return result.rowcount > 0
 

@@ -50,16 +50,16 @@
           <h1>{{ tab_labels[tab] }}</h1>
           <p class="page-subtitle">
             {% if tab == 'applied' %}Keep track of applications and follow-ups.
-            {% elif tab == 'latest' %}New matching roles from your latest manual search.
-            {% elif tab == 'prioritized' %}The 30 highest-ranked open roles for your profile, assessed by AI.
-            {% elif tab == 'deleted' %}Raw archive of unique listings collected from job boards and SEEK alerts, after duplicates are merged.
+            {% elif tab == 'latest' %}New matching roles found by Check listings.
+            {% elif tab == 'prioritized' %}Up to 30 roles, with your manual picks first and AI-ranked roles next.
+            {% elif tab == 'deleted' %}Jobs you have moved out of consideration. Clear this list to permanently remove these jobs.
             {% else %}Your saved pool of matching roles, ready to review. Check listings searches Indeed and Glassdoor, imports SEEK alerts, and removes confirmed expired jobs.{% endif %}
           </p>
         </div>
-        {% if tab == 'latest' %}
-        <form action="{{ url_for('refresh_latest') }}" method="post">
-          <button class="primary-button" id="refreshButton" type="submit" {% if search_state.busy or search_state.can_retry_seed %}disabled{% endif %}>
-            <span aria-hidden="true">↻</span> Refresh latest
+        {% if tab == 'deleted' %}
+        <form action="{{ url_for('clear_deleted') }}" method="post" onsubmit="return confirm('Permanently delete all {{ counts.deleted }} job{{ 's' if counts.deleted != 1 else '' }} currently in Deleted? This removes only those jobs and their saved links and AI assessments.');">
+          <button class="danger-button" type="submit" {% if search_state.busy or not counts.deleted %}disabled{% endif %}>
+            Clear deleted jobs
           </button>
         </form>
         {% elif tab == 'prioritized' %}
@@ -100,10 +100,10 @@
       {% if tab == 'prioritized' %}
       <section class="ai-priority-panel">
         <div class="ai-priority-heading">
-          <div><strong>AI ranking · {{ ai_model }}</strong><small>{{ ai_candidate_count }} un-applied jobs · {{ ai_pending_count }} need assessment · {{ ai_ranked_count }} currently ranked</small></div>
+          <div><strong>AI ranking · {{ ai_model }}</strong><small>{{ ai_candidate_count }} open jobs · {{ ai_pending_count }} need assessment · {{ ai_ranked_count }} AI-ranked · {{ manual_priority_count }} manual picks</small></div>
           <span class="local-tag">{{ '.env key active' if ai_api_key_source == 'dotenv' else ('Environment key active' if ai_api_key_source == 'environment' else ('API key saved' if ai_api_key_configured else 'Setup needed')) }}</span>
         </div>
-        <p>Ranking sends your circumstances{% if candidate_profile.resume_summary %}, optional resume summary{% endif %}, and job details to OpenAI. It uses API billing separately from a ChatGPT subscription. Jobs stay in their current lists.</p>
+        <p>Ranking sends your circumstances{% if candidate_profile.resume_summary %}, optional resume summary{% endif %}, and job details to OpenAI. It uses API billing separately from a ChatGPT subscription. Ranking itself does not move jobs; use each job’s dropdown to change its list.</p>
         {% if not ai_api_key_configured %}
         <form class="ai-key-form" action="{{ url_for('update_ai_api_key') }}" method="post">
           <label for="openaiApiKey">OpenAI API key</label>
@@ -160,7 +160,7 @@
 
       <div class="list-toolbar">
         <span class="result-count">{{ total }} {{ 'job' if total == 1 else 'jobs' }}</span>
-        {% if tab == 'latest' %}<span class="fresh-legend"><i></i> Added in the latest refresh</span>{% endif %}
+        {% if tab == 'latest' %}<span class="fresh-legend"><i></i> Added in the latest check</span>{% endif %}
       </div>
 
       <section class="job-list" aria-label="{{ tab_labels[tab] }} jobs">
@@ -169,7 +169,7 @@
           <div class="job-card-main">
             <div class="job-heading-row">
               <h2>{{ job.title or 'Untitled role' }}</h2>
-              {% if job.latest_new %}<span class="fresh-dot" title="Added in the latest refresh" aria-label="New in latest refresh"></span>{% endif %}
+              {% if job.latest_new %}<span class="fresh-dot" title="Added in the latest check" aria-label="New in latest check"></span>{% endif %}
             </div>
             <div class="job-meta">
               <span class="company">{{ job.company or 'Unknown company' }}</span>
@@ -177,7 +177,8 @@
               {% if job.date_posted %}<span>Posted {{ job.date_posted }}</span>{% endif %}
             </div>
             {% if tab == 'prioritized' %}
-            <section class="ai-rank-card">
+            {% if job.manual_priority %}<span class="manual-priority-tag">Manually prioritized</span>{% endif %}
+            {% if job.ai_score is defined %}<section class="ai-rank-card">
               <span class="ai-rank-number">#{{ loop.index }}</span>
               <span class="ai-score">{{ job.ai_score }}<small>/100</small></span>
               <div class="ai-rank-copy">
@@ -190,6 +191,7 @@
                 </details>
               </div>
             </section>
+            {% endif %}
             {% endif %}
             {% if job.sources %}
             <div class="source-list" aria-label="Job board links">
@@ -214,9 +216,14 @@
               <input type="hidden" name="location" value="{{ location }}">
               <input type="hidden" name="q" value="{{ query }}">
               <input type="hidden" name="page" value="{{ page }}">
-              <label class="sr-only" for="status-{{ job.id }}">Application status</label>
-              <select id="status-{{ job.id }}" name="status">
-                {% for status in statuses %}<option value="{{ status }}" {{ 'selected' if status == job.status else '' }}>{{ status.replace('_', ' ').title() }}</option>{% endfor %}
+              <label class="sr-only" for="placement-{{ job.id }}">Move job or update application status</label>
+              <select id="placement-{{ job.id }}" name="placement">
+                <optgroup label="Move to list">
+                  {% for bucket in job_buckets %}<option value="{{ bucket }}" {{ 'selected' if bucket == job.placement else '' }}>{{ bucket.replace('_', ' ').title() }}</option>{% endfor %}
+                </optgroup>
+                <optgroup label="Application status">
+                  {% for status in application_statuses %}<option value="{{ status }}" {{ 'selected' if status == job.placement else '' }}>{{ status.replace('_', ' ').title() }}</option>{% endfor %}
+                </optgroup>
               </select>
               <label class="sr-only" for="notes-{{ job.id }}">Notes</label>
               <input id="notes-{{ job.id }}" type="text" name="notes" value="{{ job.notes }}" maxlength="2000" placeholder="Add a note">
@@ -233,14 +240,14 @@
         {% else %}
         <div class="empty-state">
           <div class="empty-icon">{% if tab in ['latest', 'prioritized'] %}✦{% elif tab == 'applied' %}✓{% else %}⌕{% endif %}</div>
-          <h2>{% if tab == 'latest' %}No latest jobs yet{% elif tab == 'prioritized' and not ai_candidate_count %}No open jobs to prioritize{% elif tab == 'prioritized' and not ai_api_key_configured %}Set up AI ranking{% elif tab == 'prioritized' and ai_pending_count %}No AI rankings yet{% elif tab == 'prioritized' %}No prioritized jobs match these filters{% elif tab == 'applied' %}No applications tracked yet{% elif tab == 'deleted' %}No raw listings yet{% else %}Your backlog is empty{% endif %}</h2>
-          <p>{% if tab == 'latest' %}Use “Refresh latest” when you want to look for newly posted roles.
+          <h2>{% if tab == 'latest' %}No latest jobs yet{% elif tab == 'prioritized' and not ai_candidate_count and not manual_priority_count %}No open jobs to prioritize{% elif tab == 'prioritized' and not ai_api_key_configured and ai_pending_count %}Set up AI ranking{% elif tab == 'prioritized' and ai_pending_count and not manual_priority_count %}No AI rankings yet{% elif tab == 'prioritized' %}No prioritized jobs match these filters{% elif tab == 'applied' %}No applications tracked yet{% elif tab == 'deleted' %}No deleted jobs{% else %}Your backlog is empty{% endif %}</h2>
+          <p>{% if tab == 'latest' %}Use “Check listings” in the sidebar to search for new roles.
              {% elif tab == 'prioritized' and not ai_candidate_count %}New and saved jobs will be ranked here after they are collected.
              {% elif tab == 'prioritized' and not ai_api_key_configured %}Save an OpenAI API key above, then run AI ranking to compare your open jobs against your profile.
              {% elif tab == 'prioritized' and ai_pending_count %}Select “Prioritize top 30” to assess jobs that are new or changed.
              {% elif tab == 'prioritized' %}Try another location or search term. Prioritized shows only the top 30 open roles.
              {% elif tab == 'applied' %}Update a job’s status to see it in this list.
-             {% elif tab == 'deleted' %}Unique Indeed, Glassdoor, and SEEK listings will appear here after duplicates are merged.
+             {% elif tab == 'deleted' %}Move unwanted jobs here from their list dropdown. They will no longer appear in Backlog or Prioritized.
              {% elif search_state.busy %}The first search is underway. Jobs will appear here as they are found.
              {% else %}Matching jobs from your configured searches will appear here.{% endif %}</p>
         </div>
@@ -255,8 +262,8 @@
       </nav>
       {% endif %}
 
-      {% if tab == 'latest' %}<p class="list-note">Latest keeps up to {{ latest_limit }} jobs. Older items are trimmed from this list only and remain in Backlog.</p>{% endif %}
-      {% if tab == 'prioritized' %}<p class="list-note">The top 30 are ordered by AI score; jobs without a confirmed mandatory blocker come first when scores tie. Rankings are cached until a job, profile, allowed location, model, or prompt changes. Jobs are not moved or deleted.</p>{% endif %}
+      {% if tab == 'latest' %}<p class="list-note">Latest keeps up to {{ latest_limit }} jobs. Older items are trimmed from Latest only; their list placement stays the same.</p>{% endif %}
+      {% if tab == 'prioritized' %}<p class="list-note">Manual picks appear first, followed by the highest AI scores. AI ranking does not change a job’s list; use the dropdown to move it.</p>{% endif %}
     </main>
   </div>
 </body>

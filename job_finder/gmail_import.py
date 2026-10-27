@@ -477,11 +477,11 @@ def extract_seek_jobs(html_body: str, plain_body: str, received_at: datetime) ->
 
 def _merge_duplicate_job_state(connection, source_job_id: int, target_job_id: int) -> None:
     source = connection.execute(
-        "SELECT status, notes FROM jobs WHERE id = ?",
+        "SELECT status, notes, list_bucket FROM jobs WHERE id = ?",
         (source_job_id,),
     ).fetchone()
     target = connection.execute(
-        "SELECT status, notes FROM jobs WHERE id = ?",
+        "SELECT status, notes, list_bucket FROM jobs WHERE id = ?",
         (target_job_id,),
     ).fetchone()
     if not source or not target:
@@ -494,6 +494,16 @@ def _merge_duplicate_job_state(connection, source_job_id: int, target_job_id: in
         "applied", "interviewing", "rejected", "closed"
     }:
         target_status = source_status
+    source_bucket = source["list_bucket"]
+    target_bucket = target["list_bucket"]
+    if "deleted" in {source_bucket, target_bucket}:
+        target_bucket = "deleted"
+    elif "prioritized" in {source_bucket, target_bucket}:
+        target_bucket = "prioritized"
+    else:
+        target_bucket = "backlog"
+    if target_status in {"applied", "interviewing", "rejected", "closed"} and target_bucket == "deleted":
+        target_bucket = "backlog"
     source_notes = str(source["notes"] or "").strip()
     target_notes = str(target["notes"] or "").strip()
     if source_notes and target_notes and source_notes != target_notes:
@@ -501,9 +511,16 @@ def _merge_duplicate_job_state(connection, source_job_id: int, target_job_id: in
     else:
         merged_notes = target_notes or source_notes
     connection.execute(
-        "UPDATE jobs SET status = ?, notes = ? WHERE id = ?",
-        (target_status, merged_notes, target_job_id),
+        "UPDATE jobs SET status = ?, list_bucket = ?, notes = ? WHERE id = ?",
+        (target_status, target_bucket, merged_notes, target_job_id),
     )
+
+    if target_bucket == "deleted":
+        connection.execute(
+            "DELETE FROM latest_jobs WHERE job_id IN (?, ?)",
+            (source_job_id, target_job_id),
+        )
+        return
 
     source_latest = connection.execute(
         "SELECT added_at, is_new FROM latest_jobs WHERE job_id = ?", (source_job_id,)

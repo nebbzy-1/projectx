@@ -13,29 +13,29 @@ python -m pip install -r requirements.txt
 python -m job_finder start
 ```
 
-The start command opens Job Finder at `http://127.0.0.1:8765`. Leave the terminal window open while using it; press `Ctrl+C` there to stop the server. The first launch runs one initial search and saves every unique result to both Backlog and the raw Deleted archive. Later launches load saved jobs without searching automatically.
+The start command opens Job Finder at `http://127.0.0.1:8765`. Leave the terminal window open while using it; press `Ctrl+C` there to stop the server. The first launch runs one initial search and saves each unique result once in Backlog. Later launches load saved jobs without searching automatically.
 
 ## Use the app
 
-- **Latest** shows jobs found by a manual refresh. A blue dot marks jobs from the most recent refresh.
-- **Prioritized** shows up to 30 highest-scoring un-applied jobs after you explicitly run AI ranking. It considers new and saved jobs. It does not move, archive, or delete jobs.
+- **Latest** shows up to 30 jobs added by **Check listings**. A blue dot marks jobs from the most recent check.
+- **Prioritized** shows up to 30 jobs: manual picks first, then highest-scoring un-applied jobs after you run AI ranking. AI ranking itself does not move, archive, or delete jobs.
 - **Applied** tracks roles marked applied, interviewing, rejected, or closed.
 - **Backlog** holds new and saved roles.
-- **Deleted** is the raw listing archive after duplicate merging. Every unique listing stays here, including roles also shown in Backlog or Applied.
+- **Deleted** holds jobs you manually move out of consideration. It is separate from Backlog and Prioritized. **Clear deleted jobs** permanently removes only jobs in this list, along with their saved links and AI assessments.
 - Job-board links are grouped by source. If multiple SEEK URLs were merged into one role, expand the SEEK count to open each listing.
 - **Check listings** (in the left sidebar) runs a recent Indeed and Glassdoor search, imports labelled SEEK alert emails from Gmail, checks saved source URLs for expiry, and adds new active jobs to Latest. It requests up to 1,500 Indeed/Glassdoor results total by default (configurable from 1,000 to 2,000) and keeps up to 30 jobs in Latest. The completion log shows expired jobs deleted, Indeed/Glassdoor additions, and SEEK additions. Listings are deleted only when a board clearly confirms they have expired; blocked or unclear results are kept.
 - **Reset job search** offers a partial reset that reruns the full initial pool search, keeps/deduplicates existing jobs, then checks saved source URLs for expiry. Full reset clears saved jobs, notes, statuses, source links, and Latest history, then runs a fresh initial search. Both preserve the separate AI ranking profile.
-- Filter any list by location or search text. Update a job's status and notes on its card.
+- Filter any list by location or search text. Use a job's dropdown to move it to Backlog, Prioritized, or Deleted, or to update its application status; notes are saved on the same card.
 - Job cards stay within the page width. Status, notes, and Save controls sit together; **View job description** expands across the full card below them. Dropdown indicators use the same small, rounded chevron style.
-- The left navigation is ordered **Prioritized**, **Latest**, **Applied**, **Backlog**, **Deleted**. Latest keeps up to 30 items. Check listings adds newly found, active jobs there; a manual Latest refresh asks before saving if it would exceed 30. Older items removed from Latest remain in Backlog and SQLite.
+- The left navigation is ordered **Prioritized**, **Latest**, **Applied**, **Backlog**, **Deleted**. Check listings also updates Latest; there is no separate Latest refresh action. Older items trimmed from Latest stay in SQLite with their current list placement.
 
 ## AI Prioritized tab
 
-The **Prioritized** tab ranks every new or saved, un-applied job against your circumstances and optional resume summary. It shows up to 30 highest AI scores. Scores sort highest first; when scores tie, roles without a confirmed mandatory blocker come first, then newer listings. The result is only a separate ranked view: it does not alter status, Backlog, or Deleted. The AI ranking profile can be edited from this tab; it does not filter jobs unless you explicitly run AI ranking.
+The **Prioritized** tab shows up to 30 jobs: manual picks appear first, followed by the highest AI scores. AI ranking assesses open jobs against your circumstances and optional resume summary; the assessment itself does not move jobs. Use each job's dropdown to move it between Backlog, Prioritized, and Deleted, or to update its application status. Moving an applied job to one of those lists reopens it as a new job.
 
 To enable it, create an [OpenAI API key](https://platform.openai.com/api-keys) and paste it into the Prioritized tab, or put it after `OPENAI_API_KEY=` in the project-root `.env` file. API usage is billed separately from a ChatGPT subscription. The `.env` file is ignored by Git and saved with owner-only permissions. A shell-provided `OPENAI_API_KEY` takes precedence. Never commit or share `.env`.
 
-AI ranking runs only when you press **Prioritize top 30**. Before sending new or changed jobs, the app asks for confirmation. It sends the candidate circumstances, maximum required PQE, allowed locations, optional resume summary, and job title, employer, location, posting date, and scraped description to OpenAI. Descriptions are limited to 12,000 characters; source URLs, application notes, and Gmail contents are not sent. The OpenAI API processes this data and charges apply under that API account. Jobs are assessed in batches; successful batches are saved in SQLite so an interrupted ranking can resume. Assessments are reused until the job, profile, allowed locations, model, prompt, or rubric changes. Full reset clears the assessments with the jobs.
+AI ranking runs only when you press **Prioritize top 30**. Before sending new or changed jobs, the app asks for confirmation. It sends the candidate circumstances, maximum required PQE, allowed locations, optional resume summary, and job title, employer, location, posting date, and scraped description to OpenAI. Descriptions are limited to 12,000 characters; source URLs, application notes, and Gmail contents are not sent. The OpenAI API processes this data and charges apply under that API account. Jobs are assessed in batches; successful batches are saved in SQLite so an interrupted ranking can resume. Assessments are reused until the job, profile, allowed locations, model, prompt, or rubric changes. Moving a job to Deleted removes it from future ranking candidates. Full reset clears the assessments with the jobs.
 
 The app uses the OpenAI Responses API with Structured Outputs to require a validated JSON assessment per job. The default model and batch size are in `[ai]` in `config.toml`. The scoring prompt and response contract are [`prompts/job_fit_ranker.md`](prompts/job_fit_ranker.md) and [`prompts/job_fit_result.schema.json`](prompts/job_fit_result.schema.json).
 
@@ -110,11 +110,11 @@ python -m job_finder note 1 "Applied on company website"
 ```text
 Job Finder is a local Python job search and application tracker for Australia. Launch with `python -m job_finder start`; it starts a local Flask server and opens the browser UI. Keep the terminal open and stop the server with Ctrl+C. The first launch imports the configured pool. Later launches do not search automatically.
 
-Navigation is Prioritized, Latest, Applied, Backlog, Deleted. Each unique job is saved in SQLite and shown in Backlog and the raw Deleted archive after duplicates are merged. The Check listings button searches Indeed and Glassdoor across configured titles and locations, requests up to 1,500 results total by default (configurable from 1,000 to 2,000), imports SEEK jobs from labelled Gmail alerts, then checks all saved source links and removes only jobs clearly confirmed expired. It displays separate logs for expired jobs deleted, Indeed/Glassdoor additions, SEEK additions, and jobs added to Latest. The board search covers at least the most recent 24 hours and widens to cover time since the previous successful board refresh. Ambiguous expiry checks keep the job. The Gmail connection is local OAuth; the user must connect it first. The button also works without Gmail and logs that SEEK sync was skipped.
+Navigation is Prioritized, Latest, Applied, Backlog, Deleted. Each unique job is saved once in SQLite and starts in Backlog. Moving a job to Deleted removes it from Backlog, Prioritized, and Latest. Clearing Deleted permanently removes only those jobs and their related links/assessments. The Check listings button searches Indeed and Glassdoor across configured titles and locations, requests up to 1,500 results total by default (configurable from 1,000 to 2,000), imports SEEK jobs from labelled Gmail alerts, then checks all saved source links and removes only jobs clearly confirmed expired. It displays separate logs for expired jobs deleted, Indeed/Glassdoor additions, SEEK additions, and jobs added to Latest. The board search covers at least the most recent 24 hours and widens to cover time since the previous successful board refresh. Ambiguous expiry checks keep the job. The Gmail connection is local OAuth; the user must connect it first. The button also works without Gmail and logs that SEEK sync was skipped.
 
-Full reset clears saved jobs and search history before running the initial import. Partial reset reruns the full initial pool search and then checks expiry. Both keep Gmail authorization, `.env`, and the AI ranking profile in `data/candidate_profile.json`. The local UI also has text and location filters, Check listings, a manual Latest refresh with a 30-job cap, status/notes controls, and expandable job descriptions.
+Full reset clears saved jobs and search history before running the initial import. Partial reset reruns the full initial pool search and then checks expiry. Both keep Gmail authorization, `.env`, and the AI ranking profile in `data/candidate_profile.json`. The local UI also has text and location filters, Check listings (which updates Latest), a Deleted-only clear action, list placement and application-status controls, notes, and expandable job descriptions.
 
-The Prioritized tab explicitly sends open un-applied job details and the AI candidate profile, including an optional resume summary, to OpenAI for a top-30 ranking. Ranking does not move, filter, or delete jobs. OpenAI API billing is separate from ChatGPT. AI assessments use `prompts/job_fit_ranker.md` and are cached in SQLite by job/profile/allowed-locations/model/prompt version.
+The Prioritized tab can contain manual picks and the top AI-ranked open jobs. AI ranking sends open un-applied job details and the AI candidate profile, including an optional resume summary, to OpenAI. Ranking does not itself move or delete jobs. OpenAI API billing is separate from ChatGPT. AI assessments use `prompts/job_fit_ranker.md` and are cached in SQLite by job/profile/allowed-locations/model/prompt version.
 
 Defaults in `config.toml`: Graduate Lawyer, Junior Lawyer, Associate Lawyer; Perth, Melbourne, Sydney, Brisbane; Indeed and Glassdoor. Initial import cap is 250 results per title/location pair across enabled sources. LinkedIn scraping is disabled. Gmail queries `label:SEEK` by default; old imported alert emails can be moved to Gmail Trash with the separate cleanup action. Hosting and outbound email alerts are not configured.
 
@@ -125,6 +125,9 @@ SQLite data persists across app closes. Preserve it unless the user requests a r
 
 - Build a small labeled set to review AI ranking quality and tune its scoring rubric.
 - Look into free hosting once the local app flow is stable.
+- Bot uses common sense when applying priorotisation
+- bot searches internet to filter the best roles for the graduate/job request 
+- Chnage priorotized AI sign
 
 ## Project maintenance
 

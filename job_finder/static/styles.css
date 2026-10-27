@@ -74,6 +74,9 @@ h1 { margin: 0; font-size: 28px; letter-spacing: -.8px; line-height: 1.2; }
 .primary-button:hover:not(:disabled) { background: #254ea9; transform: translateY(-1px); }
 .primary-button span { font-size: 17px; }
 .primary-button:disabled { cursor: wait; opacity: .6; box-shadow: none; }
+.danger-button { display: inline-flex; justify-content: center; align-items: center; min-height: 39px; padding: 0 14px; border: 1px solid #efd8d5; border-radius: 8px; background: #fff8f7; color: #a34f48; cursor: pointer; font-size: 12px; font-weight: 650; }
+.danger-button:hover:not(:disabled) { background: #fbecea; }
+.danger-button:disabled { cursor: not-allowed; opacity: .55; }
 .secondary-button { min-height: 34px; border: 1px solid var(--line); background: #fff; color: #4d5c72; }
 .secondary-button:hover { background: #f7f9fc; }
 .flash-stack { display: grid; gap: 8px; margin: -12px 0 17px; }
@@ -135,6 +138,7 @@ h1 { margin: 0; font-size: 28px; letter-spacing: -.8px; line-height: 1.2; }
 .ai-key-settings summary::-webkit-details-marker, .ai-evidence summary::-webkit-details-marker { display: none; }
 .ai-rank-card { display: grid; grid-template-columns: 28px 54px minmax(0, 1fr); align-items: start; gap: 9px; margin-top: 10px; padding: 11px; border: 1px solid #e8edf5; border-radius: 8px; background: #fbfcff; }
 .ai-rank-number { padding-top: 3px; color: #8996a8; font-size: 10px; font-weight: 700; }
+.manual-priority-tag { display: inline-flex; align-items: center; margin-top: 10px; padding: 4px 8px; border-radius: 20px; background: #edf3ff; color: #3f65a7; font-size: 10px; font-weight: 650; }
 .ai-score { display: inline-flex; align-items: baseline; gap: 2px; color: #315ca3; font-size: 20px; font-weight: 750; line-height: 1; }
 .ai-score small { color: #8c98a9; font-size: 9px; font-weight: 600; }
 .ai-rank-copy { min-width: 0; }
