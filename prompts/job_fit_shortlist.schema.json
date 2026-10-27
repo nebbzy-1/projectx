@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Job Title Shortlist",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["shortlist"],
+  "properties": {
+    "shortlist": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["job_id"],
+        "properties": {
+          "job_id": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

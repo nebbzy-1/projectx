@@ -7,7 +7,8 @@
   "properties": {
     "results": {
       "type": "array",
-      "maxItems": 30,
+      "minItems": 1,
+      "maxItems": 100,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -17,11 +18,7 @@
           "tier",
           "confidence",
           "hard_blocker",
-          "summary",
-          "employer_context",
-          "strengths",
-          "gaps_or_unknowns",
-          "evidence"
+          "hard_blocker_type"
         ],
         "properties": {
           "job_id": { "type": "string", "minLength": 1 },
@@ -32,31 +29,14 @@
           },
           "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
           "hard_blocker": { "type": "boolean" },
-          "summary": { "type": "string", "maxLength": 500 },
-          "employer_context": { "type": "string", "maxLength": 250 },
-          "strengths": {
-            "type": "array",
-            "maxItems": 3,
-            "items": { "type": "string", "maxLength": 250 }
-          },
-          "gaps_or_unknowns": {
-            "type": "array",
-            "maxItems": 3,
-            "items": { "type": "string", "maxLength": 250 }
-          },
-          "evidence": {
-            "type": "array",
-            "maxItems": 3,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["job_excerpt", "candidate_fact", "assessment"],
-              "properties": {
-                "job_excerpt": { "type": "string", "maxLength": 250 },
-                "candidate_fact": { "type": "string", "maxLength": 250 },
-                "assessment": { "type": "string", "maxLength": 300 }
-              }
-            }
+          "hard_blocker_type": {
+            "type": "string",
+            "enum": [
+              "none",
+              "mandatory_pqe_exceeds_limit",
+              "strict_location_outside_allowed",
+              "other_explicit_unmet_requirement"
+            ]
           }
         }
       }

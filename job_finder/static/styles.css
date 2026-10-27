@@ -155,8 +155,6 @@ h1 { margin: 0; font-size: 28px; letter-spacing: -.8px; line-height: 1.2; }
 .ai-priority-heading strong { color: #3c4f6a; font-size: 12px; }
 .ai-priority-heading small { color: #8a96a5; font-size: 10px; }
 .ai-priority-panel > p { margin: 9px 0; }
-.ai-evidence summary { cursor: pointer; color: #5d739a; font-size: 10px; font-weight: 650; list-style: none; }
-.ai-evidence summary::-webkit-details-marker { display: none; }
 .ai-rank-card { display: grid; grid-template-columns: 28px 54px minmax(0, 1fr); align-items: start; gap: 9px; margin-top: 10px; padding: 11px; border: 1px solid #e8edf5; border-radius: 8px; background: #fbfcff; }
 .ai-rank-number { padding-top: 3px; color: #8996a8; font-size: 10px; font-weight: 700; }
 .manual-priority-tag { display: inline-flex; align-items: center; margin-top: 10px; padding: 4px 8px; border-radius: 20px; background: #edf3ff; color: #3f65a7; font-size: 10px; font-weight: 650; }
@@ -164,13 +162,6 @@ h1 { margin: 0; font-size: 28px; letter-spacing: -.8px; line-height: 1.2; }
 .ai-score small { color: #8c98a9; font-size: 9px; font-weight: 600; }
 .ai-rank-copy { min-width: 0; }
 .ai-rank-copy > strong { color: #596b85; font-size: 10px; font-weight: 680; }
-.ai-rank-copy > p { margin: 5px 0 7px; color: #5c697c; font-size: 11px; line-height: 1.5; }
-.ai-evidence { padding-top: 2px; }
-.ai-evidence ul { margin: 5px 0 7px; padding-left: 17px; color: #66758a; font-size: 10px; line-height: 1.5; }
-.ai-evidence > strong { display: inline-block; margin-top: 7px; color: #67758a; font-size: 10px; }
-.ai-evidence-quotes { border-left: 2px solid #dce6f8; margin-top: 7px; padding-left: 9px; }
-.ai-evidence-quotes p { margin: 5px 0; color: #758196; font-size: 10px; line-height: 1.45; }
-.ai-evidence-quotes q { color: #586b87; }
 
 .filter-bar { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 11px; background: #fff; box-shadow: 0 2px 5px #18243a05; }
 .search-field { display: flex; align-items: center; flex: 1; min-width: 120px; gap: 9px; padding: 0 10px; }

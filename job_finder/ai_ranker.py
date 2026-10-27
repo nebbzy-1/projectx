@@ -22,9 +22,9 @@ ROOT = Path(__file__).resolve().parent.parent
 PROMPT_PATH = ROOT / "prompts" / "job_fit_ranker.md"
 SHORTLIST_SCHEMA_PATH = ROOT / "prompts" / "job_fit_shortlist.schema.json"
 RESULT_SCHEMA_PATH = ROOT / "prompts" / "job_fit_result.schema.json"
-PROMPT_VERSION = "codex-job-fit-rank-v3"
-RUBRIC_VERSION = "australian-junior-law-role-v2"
-TOP_LIMIT = 30
+PROMPT_VERSION = "codex-job-fit-rank-v5"
+RUBRIC_VERSION = "australian-junior-law-role-v4"
+TOP_LIMIT = 50
 SHORTLIST_LIMIT = 100
 DESCRIPTION_CHAR_LIMIT = 12000
 DESCRIPTION_CONTEXT_LIMIT = 6000
@@ -33,7 +33,12 @@ CODEX_TIMEOUT_SECONDS = 900
 
 TIERS = {"strong_fit", "possible_fit", "weak_fit", "insufficient_information"}
 CONFIDENCE = {"high", "medium", "low"}
-EVIDENCE_FIELDS = {"job_excerpt", "candidate_fact", "assessment"}
+HARD_BLOCKER_TYPES = {
+    "none",
+    "mandatory_pqe_exceeds_limit",
+    "strict_location_outside_allowed",
+    "other_explicit_unmet_requirement",
+}
 
 
 class AIRankingError(RuntimeError):
@@ -45,8 +50,8 @@ class RankingSummary:
     candidates: int
     shortlisted: int
     assessed: int
-    reused: int
     prioritized: int
+    moved_to_deleted: int
 
 
 def codex_cli_path() -> str | None:
@@ -264,9 +269,9 @@ def _validate_shortlist(response: dict, candidates: list[dict]) -> list[str]:
 
 def _validate_results(response: dict, expected_ids: list[str]) -> dict[str, dict]:
     rows = response.get("results")
-    if not isinstance(rows, list) or len(rows) != min(TOP_LIMIT, len(expected_ids)):
+    if not isinstance(rows, list) or len(rows) != len(expected_ids):
         raise AIRankingError(
-            "Codex did not return the expected number of top jobs. No saved priorities were changed."
+            "Codex did not assess every shortlisted job. No saved priorities were changed."
         )
     expected = set(expected_ids)
     results: dict[str, dict] = {}
@@ -284,22 +289,11 @@ def _validate_results(response: dict, expected_ids: list[str]) -> dict[str, dict
             raise AIRankingError("Codex returned an invalid fit tier or confidence value.")
         if type(result.get("hard_blocker")) is not bool:
             raise AIRankingError("Codex returned an invalid mandatory-requirement assessment.")
-        for field in ("summary", "employer_context"):
-            if not isinstance(result.get(field), str):
-                raise AIRankingError(f"Codex omitted {field.replace('_', ' ')} from an assessment.")
-        for field in ("strengths", "gaps_or_unknowns", "evidence"):
-            value = result.get(field)
-            if not isinstance(value, list) or len(value) > 3:
-                raise AIRankingError(f"Codex returned invalid {field} in an assessment.")
-        if any(not isinstance(value, str) for value in result["strengths"] + result["gaps_or_unknowns"]):
-            raise AIRankingError("Codex returned invalid explanation text.")
-        for evidence in result["evidence"]:
-            if (
-                not isinstance(evidence, dict)
-                or set(evidence) != EVIDENCE_FIELDS
-                or any(not isinstance(evidence[field], str) for field in EVIDENCE_FIELDS)
-            ):
-                raise AIRankingError("Codex returned invalid evidence in an assessment.")
+        blocker_type = result.get("hard_blocker_type")
+        if blocker_type not in HARD_BLOCKER_TYPES:
+            raise AIRankingError("Codex returned an invalid blocker category.")
+        if result["hard_blocker"] != (blocker_type != "none"):
+            raise AIRankingError("Codex returned inconsistent blocker data.")
         results[job_id] = result
         previous_score = score
     if len(results) != len(rows):
@@ -378,7 +372,7 @@ def rank_open_jobs(
         instructions=instructions,
         task_data={
             "stage": "detailed_rank",
-            "top_n": min(TOP_LIMIT, len(detail_jobs)),
+            "display_limit": min(TOP_LIMIT, len(detail_jobs)),
             "candidate": candidate_data,
             "jobs": detail_jobs,
         },
@@ -389,8 +383,14 @@ def rank_open_jobs(
     assessed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     profile_digest = profile_hash(profile, locations)
 
-    # Replace this run's current assessments as one transaction, so malformed or
-    # interrupted Codex output can never erase the previous visible top 30.
+    # Replace the current assessments and move clear backlog blockers atomically.
+    candidates_by_id = {str(row["id"]): row for row in candidates}
+    deleted_ids = [
+        int(job_id)
+        for job_id, result in results.items()
+        if result["hard_blocker"] and candidates_by_id[job_id]["list_bucket"] == "backlog"
+    ]
+    moved_to_deleted = 0
     try:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(
@@ -402,10 +402,6 @@ def rank_open_jobs(
         )
         for job_id, result in results.items():
             job_id_int = int(job_id)
-            employer_context = result["employer_context"].strip()
-            summary = result["summary"].strip()
-            if employer_context:
-                summary = f"Employer context: {employer_context}\n{summary}"
             connection.execute(
                 """INSERT INTO ai_job_assessments
                    (job_id, score, tier, confidence, hard_blocker, summary,
@@ -418,10 +414,10 @@ def rank_open_jobs(
                     result["tier"],
                     result["confidence"],
                     int(result["hard_blocker"]),
-                    summary[:2000],
-                    json.dumps(result["strengths"], ensure_ascii=False),
-                    json.dumps(result["gaps_or_unknowns"], ensure_ascii=False),
-                    json.dumps(result["evidence"], ensure_ascii=False),
+                    "",
+                    "[]",
+                    "[]",
+                    "[]",
                     model,
                     PROMPT_VERSION,
                     RUBRIC_VERSION,
@@ -430,19 +426,29 @@ def rank_open_jobs(
                     assessed_at,
                 ),
             )
+        for job_id in deleted_ids:
+            cursor = connection.execute(
+                """UPDATE jobs SET list_bucket = 'deleted'
+                   WHERE id = ? AND status IN ('new', 'saved') AND list_bucket = 'backlog'""",
+                (job_id,),
+            )
+            if cursor.rowcount:
+                moved_to_deleted += cursor.rowcount
+                connection.execute("DELETE FROM latest_jobs WHERE job_id = ?", (job_id,))
         connection.commit()
     except Exception:
         connection.rollback()
         raise
 
     if progress:
-        progress(2, 2, f"Saved the top {len(results)} jobs to Prioritized")
+        progress(2, 2, f"Saved rankings and moved {moved_to_deleted} clear blockers to Deleted")
+    remaining_assessed = len(results) - moved_to_deleted
     return RankingSummary(
         candidates=len(candidates),
         shortlisted=len(shortlist_ids),
         assessed=len(results),
-        reused=0,
-        prioritized=len(results),
+        prioritized=min(remaining_assessed, TOP_LIMIT),
+        moved_to_deleted=moved_to_deleted,
     )
 
 
@@ -471,11 +477,6 @@ def prioritized_view_data(
             ai_tier=assessment["tier"],
             ai_confidence=assessment["confidence"],
             ai_hard_blocker=bool(assessment["hard_blocker"]),
-            ai_summary=assessment["summary"],
-            ai_strengths=json.loads(assessment["strengths_json"] or "[]"),
-            ai_gaps=json.loads(assessment["gaps_json"] or "[]"),
-            ai_evidence=json.loads(assessment["evidence_json"] or "[]"),
-            ai_assessed_at=assessment["assessed_at"],
         )
         (manually_prioritized if item["manual_priority"] else ai_prioritized).append(item)
 

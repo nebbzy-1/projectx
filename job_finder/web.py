@@ -437,7 +437,7 @@ class SearchController:
             self.config["candidate_profile"] = profile
             self._state.update(
                 task="done",
-                message="AI ranking profile saved. Codex will use it the next time you run Prioritize top 30.",
+                message="AI ranking profile saved. Codex will use it the next time you run Prioritize top 50.",
                 error=False,
                 progress=None,
                 details=[],
@@ -666,8 +666,8 @@ class SearchController:
             )
             message = (
                 f"Codex prioritization complete: screened {summary.candidates} open jobs, "
-                f"shortlisted {summary.shortlisted} for detailed review, and saved "
-                f"{summary.prioritized} top jobs to Prioritized."
+                f"assessed {summary.assessed} shortlisted roles, moved {summary.moved_to_deleted} "
+                f"clear blockers from Backlog to Deleted, and ranked up to {summary.prioritized} jobs."
             )
             self._finish_success(message)
         except Exception as error:
@@ -930,7 +930,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             flash(str(error), "error")
         else:
             if updated:
-                flash("AI ranking profile saved. Codex will use it the next time you run Prioritize top 30.", "success")
+                flash("AI ranking profile saved. Codex will use it the next time you run Prioritize top 50.", "success")
             else:
                 flash("Wait for the current search to finish before changing the AI ranking profile.", "error")
         return redirect(url_for("index", tab="profile"))
@@ -957,7 +957,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
         if not codex_cli_available():
             flash("Codex CLI was not found. Install it and restart Job Finder before prioritizing jobs.", "error")
         elif controller.start_ai_ranking():
-            flash("Codex prioritization started. It will screen the open jobs and save the top 30 when complete.", "success")
+            flash("Codex prioritization started. It will rank up to 50 jobs and move clear mandatory mismatches from Backlog to Deleted.", "success")
         else:
             flash("Wait for the current search or refresh to finish before ranking jobs.", "error")
         return redirect(url_for("index", tab="prioritized"))
