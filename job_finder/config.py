@@ -71,12 +71,6 @@ def load_search_config() -> dict:
     search["gmail_max_messages"] = max(1, min(int(gmail.get("max_messages", 250)), 1000))
     search["gmail_stale_after_days"] = max(1, int(gmail.get("stale_after_days", 90)))
     ai = config.get("ai", {})
-    search["ai_provider"] = str(ai.get("provider", "openai")).strip().casefold() or "openai"
     search["ai_model"] = str(ai.get("model", "gpt-6-luna")).strip() or "gpt-6-luna"
-    search["ai_responses_url"] = (
-        str(ai.get("responses_url", "https://api.openai.com/v1/responses")).strip()
-        or "https://api.openai.com/v1/responses"
-    )
-    search["ai_batch_size"] = max(1, min(int(ai.get("batch_size", 10)), 25))
     search["candidate_profile"] = load_candidate_profile()
     return search

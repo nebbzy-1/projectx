@@ -22,11 +22,8 @@ max_messages = 250
 stale_after_days = 90
 
 [ai]
-# AI ranking runs only when requested from the Prioritized tab.
-provider = "openai"
+# The local Codex CLI runs only when requested from the Prioritized tab.
 model = "gpt-6-luna"
-responses_url = "https://api.openai.com/v1/responses"
-batch_size = 10
 
 [initial_import]
 # Seed the backlog once on the first app launch.

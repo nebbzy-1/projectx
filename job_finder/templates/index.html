@@ -54,7 +54,7 @@
           <p class="page-subtitle">
             {% if tab == 'applied' %}Keep track of applications and follow-ups.
             {% elif tab == 'latest' %}New matching roles found by Check listings.
-            {% elif tab == 'prioritized' %}Up to 30 roles, with your manual picks first and AI-ranked roles next.
+            {% elif tab == 'prioritized' %}Up to 30 roles, with your manual picks first and Codex-ranked roles next.
             {% elif tab == 'deleted' %}Jobs you have moved out of consideration. Clear this list to permanently remove these jobs.
             {% elif tab == 'profile' %}Your candidate details and the search settings the job finder uses.
             {% else %}Your saved pool of matching roles, ready to review. Check listings searches Indeed and Glassdoor, imports SEEK alerts, and removes confirmed expired jobs.{% endif %}
@@ -67,8 +67,8 @@
           </button>
         </form>
         {% elif tab == 'prioritized' %}
-        <form action="{{ url_for('prioritize_jobs') }}" method="post" {% if ai_pending_count %}onsubmit="return confirm('Send your profile{% if candidate_profile.resume_summary %}, resume summary{% endif %}, and {{ ai_pending_count }} new or changed job records to OpenAI for AI ranking? API usage may incur separate charges.');"{% endif %}>
-          <button class="primary-button" type="submit" {% if search_state.busy or not ai_api_key_configured or not ai_candidate_count %}disabled{% endif %}>✦ Prioritize top 30</button>
+        <form action="{{ url_for('prioritize_jobs') }}" method="post" {% if ai_candidate_count %}onsubmit="return confirm('Send your saved profile{% if candidate_profile.resume_summary %}, resume summary{% endif %}, and titles for {{ ai_candidate_count }} open jobs to your signed-in Codex CLI session? It will receive descriptions for up to 100 shortlisted roles and may use live web search for employer context. Continue?');"{% endif %}>
+          <button class="primary-button" type="submit" {% if search_state.busy or not ai_codex_available or not ai_candidate_count %}disabled{% endif %}>✦ Prioritize top 30</button>
         </form>
         {% endif %}
       </header>
@@ -106,7 +106,7 @@
         <div class="profile-card profile-editor">
           <div class="profile-card-heading">
             <span class="settings-icon">◎</span>
-            <div><h2>Your AI job-fit profile</h2><p>The current prioritizer reads this saved profile. The planned backlog filter can use the same criteria.</p></div>
+            <div><h2>Your AI job-fit profile</h2><p>Codex reads this saved profile when you prioritize jobs.</p></div>
           </div>
           <form class="profile-form profile-page-form" action="{{ url_for('update_profile') }}" method="post">
             <label for="candidateCircumstances">Your circumstances</label>
@@ -154,25 +154,14 @@
       {% if tab == 'prioritized' %}
       <section class="ai-priority-panel">
         <div class="ai-priority-heading">
-          <div><strong>AI ranking · {{ ai_model }}</strong><small>{{ ai_candidate_count }} open jobs · {{ ai_pending_count }} need assessment · {{ ai_ranked_count }} AI-ranked · {{ manual_priority_count }} manual picks</small></div>
-          <span class="local-tag">{{ '.env key active' if ai_api_key_source == 'dotenv' else ('Environment key active' if ai_api_key_source == 'environment' else ('API key saved' if ai_api_key_configured else 'Setup needed')) }}</span>
+          <div><strong>Codex prioritization · {{ ai_model }}</strong><small>{{ ai_candidate_count }} open jobs · {{ ai_ranked_count }} saved AI-ranked jobs · {{ manual_priority_count }} manual picks</small></div>
+          <span class="local-tag">{{ 'Codex CLI found' if ai_codex_available else 'Codex CLI needed' }}</span>
         </div>
-        <p>Ranking sends your circumstances{% if candidate_profile.resume_summary %}, optional resume summary{% endif %}, and job details to OpenAI. It uses API billing separately from a ChatGPT subscription. Ranking itself does not move jobs; use each job’s dropdown to change its list.</p>
-        {% if not ai_api_key_configured %}
-        <form class="ai-key-form" action="{{ url_for('update_ai_api_key') }}" method="post">
-          <label for="openaiApiKey">OpenAI API key</label>
-          <div><input id="openaiApiKey" type="password" name="api_key" required autocomplete="new-password" placeholder="Paste an API key"><button class="secondary-button" type="submit">Save key to .env</button></div>
-          <small>The key is saved in the ignored project .env file and is never shown in the page after saving.</small>
-        </form>
-        {% elif ai_api_key_source == 'environment' %}
-        <p>The <code>OPENAI_API_KEY</code> value from the app’s launch environment is active. It takes precedence over a locally saved key; change that value and restart the app to use a different key.</p>
+        <p>When you run it, Codex first screens every open job by title, then compares shortlisted descriptions with your profile and may search the web for shortlisted employers. It sends your circumstances{% if candidate_profile.resume_summary %}, optional resume summary{% endif %}, and job listing text to the Codex CLI account you are signed in with. That account’s usage limits apply. It never moves or deletes jobs. Use each job’s dropdown if you want to change its list.</p>
+        {% if not ai_codex_available %}
+        <p>Install Codex CLI and sign in from Terminal with <code>codex login</code>. Restart Job Finder after installing so it can find the command.</p>
         {% else %}
-        <details class="ai-key-settings"><summary>Change API key</summary>
-          <form class="ai-key-form" action="{{ url_for('update_ai_api_key') }}" method="post">
-            <label for="openaiApiKey">Replacement OpenAI API key</label>
-          <div><input id="openaiApiKey" type="password" name="api_key" required autocomplete="new-password" placeholder="Paste a replacement API key"><button class="secondary-button" type="submit">Save key to .env</button></div>
-          </form>
-        </details>
+        <p>If you have not signed in to Codex CLI on this Mac yet, run <code>codex login</code> in Terminal.</p>
         {% endif %}
       </section>
       {% endif %}
@@ -272,11 +261,11 @@
         {% else %}
         <div class="empty-state">
           <div class="empty-icon">{% if tab in ['latest', 'prioritized'] %}✦{% elif tab == 'applied' %}✓{% else %}⌕{% endif %}</div>
-          <h2>{% if tab == 'latest' %}No latest jobs yet{% elif tab == 'prioritized' and not ai_candidate_count and not manual_priority_count %}No open jobs to prioritize{% elif tab == 'prioritized' and not ai_api_key_configured and ai_pending_count %}Set up AI ranking{% elif tab == 'prioritized' and ai_pending_count and not manual_priority_count %}No AI rankings yet{% elif tab == 'prioritized' %}No prioritized jobs match these filters{% elif tab == 'applied' %}No applications tracked yet{% elif tab == 'deleted' %}No deleted jobs{% else %}Your backlog is empty{% endif %}</h2>
+          <h2>{% if tab == 'latest' %}No latest jobs yet{% elif tab == 'prioritized' and not ai_candidate_count and not manual_priority_count %}No open jobs to prioritize{% elif tab == 'prioritized' and not ai_codex_available and ai_candidate_count %}Set up Codex CLI{% elif tab == 'prioritized' and not ai_ranked_count and not manual_priority_count %}No AI rankings yet{% elif tab == 'prioritized' %}No prioritized jobs match these filters{% elif tab == 'applied' %}No applications tracked yet{% elif tab == 'deleted' %}No deleted jobs{% else %}Your backlog is empty{% endif %}</h2>
           <p>{% if tab == 'latest' %}Use “Check listings” in the sidebar to search for new roles.
              {% elif tab == 'prioritized' and not ai_candidate_count %}New and saved jobs will be ranked here after they are collected.
-             {% elif tab == 'prioritized' and not ai_api_key_configured %}Save an OpenAI API key above, then run AI ranking to compare your open jobs against your profile.
-             {% elif tab == 'prioritized' and ai_pending_count %}Select “Prioritize top 30” to assess jobs that are new or changed.
+             {% elif tab == 'prioritized' and not ai_codex_available %}Install Codex CLI and sign in with <code>codex login</code>, then restart Job Finder.
+             {% elif tab == 'prioritized' and not ai_ranked_count and not manual_priority_count %}Select “Prioritize top 30” to screen the open jobs and compare the strongest matches with your profile.
              {% elif tab == 'prioritized' %}Try another location or search term. Prioritized shows only the top 30 open roles.
              {% elif tab == 'applied' %}Update a job’s status to see it in this list.
              {% elif tab == 'deleted' %}Move unwanted jobs here from their list dropdown. They will no longer appear in Backlog or Prioritized.
@@ -295,7 +284,7 @@
       {% endif %}
 
       {% if tab == 'latest' %}<p class="list-note">Latest keeps up to {{ latest_limit }} jobs. Older items are trimmed from Latest only; their list placement stays the same.</p>{% endif %}
-      {% if tab == 'prioritized' %}<p class="list-note">Manual picks appear first, followed by the highest AI scores. AI ranking does not change a job’s list; use the dropdown to move it.</p>{% endif %}
+      {% if tab == 'prioritized' %}<p class="list-note">Manual picks appear first, followed by Codex’s highest-scoring roles. Prioritizing does not change a job’s list; use the dropdown to move it.</p>{% endif %}
       {% endif %}
     </main>
   </div>

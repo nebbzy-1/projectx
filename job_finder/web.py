@@ -38,11 +38,9 @@ from .runner import (
 from .availability import remove_confirmed_expired
 from .ai_ranker import (
     AIRankingError,
-    api_key_configured,
-    api_key_source,
+    codex_cli_available,
     prioritized_view_data,
     rank_open_jobs,
-    save_api_key,
 )
 from .gmail_import import (
     GmailSetupError,
@@ -439,7 +437,7 @@ class SearchController:
             self.config["candidate_profile"] = profile
             self._state.update(
                 task="done",
-                message="AI ranking profile saved. Existing rankings will refresh the next time you run Prioritize top 30.",
+                message="AI ranking profile saved. Codex will use it the next time you run Prioritize top 30.",
                 error=False,
                 progress=None,
                 details=[],
@@ -638,7 +636,7 @@ class SearchController:
                 return False
             self._state.update(
                 task="ai_ranking",
-                message="Preparing your un-applied jobs for AI ranking…",
+                message="Preparing your open jobs for Codex prioritization…",
                 error=False,
                 progress=None,
                 details=[],
@@ -652,38 +650,29 @@ class SearchController:
             if self._state["task"] != "ai_ranking":
                 return
             self._state.update(
-                message="Ranking open jobs against your profile…",
+                message="Prioritizing open jobs with Codex…",
                 progress={"done": done, "total": total, "label": label},
             )
 
     def _run_ai_ranking(self) -> None:
         connection = connect(self.database_path)
         try:
-            if self.config.get("ai_provider", "openai") != "openai":
-                raise AIRankingError("This build currently supports the OpenAI Responses API provider.")
             summary = rank_open_jobs(
                 connection,
                 profile=self.config.get("candidate_profile", {}),
                 locations=self.config.get("locations", []),
                 model=self.config.get("ai_model", "gpt-6-luna"),
-                endpoint=self.config.get("ai_responses_url", "https://api.openai.com/v1/responses"),
-                batch_size=self.config.get("ai_batch_size", 10),
                 progress=self._update_ai_progress,
             )
-            if summary.assessed:
-                message = (
-                    f"AI ranking complete: assessed {summary.assessed} new or changed jobs, "
-                    f"reused {summary.reused} saved assessments, and selected up to {summary.prioritized} for Prioritized."
-                )
-            else:
-                message = (
-                    f"AI priorities are up to date: reused {summary.reused} saved assessments; "
-                    f"no API calls were needed."
-                )
+            message = (
+                f"Codex prioritization complete: screened {summary.candidates} open jobs, "
+                f"shortlisted {summary.shortlisted} for detailed review, and saved "
+                f"{summary.prioritized} top jobs to Prioritized."
+            )
             self._finish_success(message)
         except Exception as error:
             self._finish_error(
-                f"AI ranking stopped: {error}. Completed batches are saved; run it again to resume."
+                f"Codex prioritization stopped: {error}. Previous saved priorities were kept; try again after fixing the issue."
             )
         finally:
             connection.close()
@@ -772,7 +761,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             jobs = []
             for row in rows:
                 job = dict(row)
-                job["latest_new"] = bool(job["latest_new"])
+                job["latest_new"] = bool(job.get("latest_new", False))
                 job["placement"] = (
                     job["status"]
                     if job["status"] in APPLICATION_STATUSES
@@ -834,7 +823,6 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
                 "gmail_query": search_config.get("gmail_query", "label:SEEK"),
                 "gmail_max_messages": search_config.get("gmail_max_messages", 250),
                 "ai_model": search_config.get("ai_model", "gpt-6-luna"),
-                "ai_batch_size": search_config.get("ai_batch_size", 10),
             },
             job_buckets=JOB_BUCKETS,
             application_statuses=APPLICATION_STATUSES,
@@ -842,10 +830,8 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             latest_limit=LATEST_LIMIT,
             gmail_connected=gmail_connected(),
             ai_model=controller.config.get("ai_model", "gpt-6-luna"),
-            ai_api_key_configured=api_key_configured(),
-            ai_api_key_source=api_key_source(),
+            ai_codex_available=codex_cli_available(),
             ai_candidate_count=priority_data["candidate_count"],
-            ai_pending_count=priority_data["pending_count"],
             ai_ranked_count=priority_data["ai_ranked_count"],
             manual_priority_count=priority_data["manual_priority_count"],
         )
@@ -944,7 +930,7 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
             flash(str(error), "error")
         else:
             if updated:
-                flash("AI ranking profile saved. Existing rankings will update the next time you run Prioritize top 30.", "success")
+                flash("AI ranking profile saved. Codex will use it the next time you run Prioritize top 30.", "success")
             else:
                 flash("Wait for the current search to finish before changing the AI ranking profile.", "error")
         return redirect(url_for("index", tab="profile"))
@@ -966,27 +952,12 @@ def create_app(*, seed_on_start: bool = True, config: dict | None = None, databa
                 flash("Wait for the current search or refresh to finish before changing search setup.", "error")
         return redirect(url_for("index", tab="profile"))
 
-    @app.post("/ai/api-key")
-    def update_ai_api_key():
-        try:
-            save_api_key(request.form.get("api_key", ""))
-        except (ValueError, OSError) as error:
-            flash(str(error), "error")
-        else:
-            flash(
-                "OpenAI API key saved to the ignored .env file. API usage is billed separately from a ChatGPT subscription.",
-                "success",
-            )
-        return redirect(url_for("index", tab="prioritized"))
-
     @app.post("/ai/prioritize")
     def prioritize_jobs():
-        if search_config.get("ai_provider", "openai") != "openai":
-            flash("This app currently uses the OpenAI Responses API for AI ranking.", "error")
-        elif not api_key_configured():
-            flash("Save an OpenAI API key before starting AI ranking.", "error")
+        if not codex_cli_available():
+            flash("Codex CLI was not found. Install it and restart Job Finder before prioritizing jobs.", "error")
         elif controller.start_ai_ranking():
-            flash("AI ranking started. Completed batches will be saved as they finish.", "success")
+            flash("Codex prioritization started. It will screen the open jobs and save the top 30 when complete.", "success")
         else:
             flash("Wait for the current search or refresh to finish before ranking jobs.", "error")
         return redirect(url_for("index", tab="prioritized"))
