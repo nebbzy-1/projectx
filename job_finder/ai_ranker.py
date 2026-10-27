@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from typing import Callable
 
@@ -22,10 +23,11 @@ ROOT = Path(__file__).resolve().parent.parent
 PROMPT_PATH = ROOT / "prompts" / "job_fit_ranker.md"
 SHORTLIST_SCHEMA_PATH = ROOT / "prompts" / "job_fit_shortlist.schema.json"
 RESULT_SCHEMA_PATH = ROOT / "prompts" / "job_fit_result.schema.json"
-PROMPT_VERSION = "codex-job-fit-rank-v5"
+PROMPT_VERSION = "codex-job-fit-rank-v6"
 RUBRIC_VERSION = "australian-junior-law-role-v4"
 TOP_LIMIT = 50
 SHORTLIST_LIMIT = 100
+DETAIL_BATCH_SIZE = 50
 DESCRIPTION_CHAR_LIMIT = 12000
 DESCRIPTION_CONTEXT_LIMIT = 6000
 RESUME_CHAR_LIMIT = 8000
@@ -42,7 +44,16 @@ HARD_BLOCKER_TYPES = {
 
 
 class AIRankingError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str | None = None,
+        debug_response: object | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.debug_response = debug_response
 
 
 @dataclass
@@ -234,70 +245,91 @@ def _run_codex(
 
         if process.returncode != 0:
             detail = (process.stderr or process.stdout or "").strip()
+            try:
+                command_output = output_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                command_output = process.stdout or process.stderr or ""
             if "not logged in" in detail.casefold() or "run codex login" in detail.casefold():
-                raise AIRankingError("Codex is not signed in. Run `codex login` in Terminal, then try again.")
+                raise AIRankingError(
+                    "Codex is not signed in. Run `codex login` in Terminal, then try again.",
+                    stage="Codex CLI",
+                    debug_response=command_output,
+                )
             suffix = f" Details: {detail[-1800:]}" if detail else ""
-            raise AIRankingError(f"Codex CLI failed with exit code {process.returncode}.{suffix}")
+            raise AIRankingError(
+                f"Codex CLI failed with exit code {process.returncode}.{suffix}",
+                stage="Codex CLI",
+                debug_response=command_output,
+            )
 
         try:
             response_text = output_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise AIRankingError(
+                "Codex did not return the required structured JSON response.",
+                stage="Codex CLI",
+                debug_response=process.stdout or process.stderr or "",
+            ) from error
+        try:
             response = json.loads(response_text)
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            raise AIRankingError("Codex did not return the required structured JSON response.") from error
+        except json.JSONDecodeError as error:
+            raise AIRankingError(
+                "Codex returned invalid JSON.",
+                stage="Codex CLI response",
+                debug_response=response_text,
+            ) from error
         if not isinstance(response, dict):
-            raise AIRankingError("Codex returned an invalid response; expected a JSON object.")
+            raise AIRankingError(
+                "Codex returned an invalid response; expected a JSON object.",
+                stage="Codex CLI response",
+                debug_response=response_text,
+            )
         return response
 
 
 def _validate_shortlist(response: dict, candidates: list[dict]) -> list[str]:
     rows = response.get("shortlist")
-    if not isinstance(rows, list) or len(rows) > min(SHORTLIST_LIMIT, len(candidates)):
-        raise AIRankingError("Codex returned an invalid title-screen shortlist.")
+    if not isinstance(rows, list):
+        return []
     valid_ids = {str(row["id"]) for row in candidates}
     selected: list[str] = []
     for item in rows:
+        if len(selected) >= min(SHORTLIST_LIMIT, len(candidates)):
+            break
         if not isinstance(item, dict) or not isinstance(item.get("job_id"), str):
-            raise AIRankingError("Codex returned an invalid job in the title-screen shortlist.")
+            continue
         job_id = item["job_id"]
         if job_id not in valid_ids or job_id in selected:
-            raise AIRankingError("Codex returned a duplicate or unknown job ID in the shortlist.")
+            continue
         selected.append(job_id)
-    if candidates and not selected:
-        raise AIRankingError("Codex found no jobs for detailed review. No saved priorities were changed.")
     return selected
 
 
 def _validate_results(response: dict, expected_ids: list[str]) -> dict[str, dict]:
     rows = response.get("results")
-    if not isinstance(rows, list) or len(rows) != len(expected_ids):
-        raise AIRankingError(
-            "Codex did not assess every shortlisted job. No saved priorities were changed."
-        )
+    if not isinstance(rows, list):
+        return {}
     expected = set(expected_ids)
     results: dict[str, dict] = {}
-    previous_score = 101
     for result in rows:
         if not isinstance(result, dict):
-            raise AIRankingError("Codex returned an invalid job assessment.")
+            continue
         job_id = result.get("job_id")
         if not isinstance(job_id, str) or job_id not in expected or job_id in results:
-            raise AIRankingError("Codex returned a duplicate or unknown job ID. No results were saved.")
+            continue
         score = result.get("score")
-        if type(score) is not int or not 0 <= score <= 100 or score > previous_score:
-            raise AIRankingError("Codex results were not validly ordered by score. No results were saved.")
+        if type(score) is not int or not 0 <= score <= 100:
+            continue
         if result.get("tier") not in TIERS or result.get("confidence") not in CONFIDENCE:
-            raise AIRankingError("Codex returned an invalid fit tier or confidence value.")
+            continue
         if type(result.get("hard_blocker")) is not bool:
-            raise AIRankingError("Codex returned an invalid mandatory-requirement assessment.")
+            continue
         blocker_type = result.get("hard_blocker_type")
         if blocker_type not in HARD_BLOCKER_TYPES:
-            raise AIRankingError("Codex returned an invalid blocker category.")
+            continue
         if result["hard_blocker"] != (blocker_type != "none"):
-            raise AIRankingError("Codex returned inconsistent blocker data.")
+            continue
         results[job_id] = result
-        previous_score = score
-    if len(results) != len(rows):
-        raise AIRankingError("Codex returned duplicate assessments.")
     return results
 
 
@@ -329,11 +361,15 @@ def rank_open_jobs(
     payloads = {str(row["id"]): _job_payload(row) for row in candidates}
     hashes = {job_id: _job_hash(payload) for job_id, payload in payloads.items()}
     instructions = _instructions()
+    profile_digest = profile_hash(profile, locations)
+    previously_valid, _ = _valid_assessments(connection, candidates, profile_digest, model)
+    maximum_batches = (min(SHORTLIST_LIMIT, len(candidates)) + DETAIL_BATCH_SIZE - 1) // DETAIL_BATCH_SIZE
+    progress_total = maximum_batches + 2  # title screen, detail batches, then one database save
     title_candidate_data = {
         key: value for key, value in candidate_data.items() if key != "resume_summary"
     }
     if progress:
-        progress(0, 2, f"Codex is screening titles across {len(candidates)} open jobs")
+        progress(0, progress_total, f"Codex is screening titles across {len(candidates)} open jobs")
 
     shortlist_response = _run_codex(
         cli_path=cli_path,
@@ -357,31 +393,85 @@ def rank_open_jobs(
         schema_path=SHORTLIST_SCHEMA_PATH,
         use_web_search=False,
     )
+    raw_shortlist = shortlist_response.get("shortlist")
+    raw_shortlist_count = len(raw_shortlist) if isinstance(raw_shortlist, list) else 0
     shortlist_ids = _validate_shortlist(shortlist_response, candidates)
-    if progress:
-        progress(1, 2, f"Codex shortlisted {len(shortlist_ids)} roles; comparing descriptions and fit")
-
+    if len(shortlist_ids) < raw_shortlist_count:
+        skipped = raw_shortlist_count - len(shortlist_ids)
+        print(
+            f"[Codex prioritizer] Title screen kept {len(shortlist_ids)} valid unique job IDs "
+            f"and skipped {skipped} invalid, duplicate, or unknown entries.",
+            file=sys.stderr,
+            flush=True,
+        )
+    if not shortlist_ids:
+        if progress:
+            progress(progress_total, progress_total, "Codex returned no usable shortlist; existing rankings were kept")
+        return RankingSummary(
+            candidates=len(candidates),
+            shortlisted=0,
+            assessed=0,
+            prioritized=min(len(previously_valid), TOP_LIMIT),
+            moved_to_deleted=0,
+        )
     detail_jobs = []
     for job_id in shortlist_ids:
         payload = payloads[job_id]
         description, was_truncated = _description_for_review(payload["description"])
         detail_jobs.append({**payload, "description": description, "description_truncated": was_truncated})
-    results_response = _run_codex(
-        cli_path=cli_path,
-        model=model,
-        instructions=instructions,
-        task_data={
-            "stage": "detailed_rank",
-            "display_limit": min(TOP_LIMIT, len(detail_jobs)),
-            "candidate": candidate_data,
-            "jobs": detail_jobs,
-        },
-        schema_path=RESULT_SCHEMA_PATH,
-        use_web_search=True,
-    )
-    results = _validate_results(results_response, shortlist_ids)
+    detail_batches = [
+        detail_jobs[offset:offset + DETAIL_BATCH_SIZE]
+        for offset in range(0, len(detail_jobs), DETAIL_BATCH_SIZE)
+    ]
+    if progress:
+        progress(1, progress_total, f"Codex shortlisted {len(shortlist_ids)} roles for {len(detail_batches)} detailed batch(es)")
+
+    results: dict[str, dict] = {}
+    for batch_index, detail_batch in enumerate(detail_batches):
+        batch_ids = [job["job_id"] for job in detail_batch]
+        research_limit = 10 if batch_index == 0 else 0
+        results_response = _run_codex(
+            cli_path=cli_path,
+            model=model,
+            instructions=instructions,
+            task_data={
+                "stage": "detailed_rank",
+                "employer_research_limit": research_limit,
+                "candidate": candidate_data,
+                "jobs": detail_batch,
+            },
+            schema_path=RESULT_SCHEMA_PATH,
+            use_web_search=research_limit > 0,
+        )
+        batch_results = _validate_results(results_response, batch_ids)
+        results.update(batch_results)
+        if len(batch_results) < len(batch_ids):
+            missing_ids = sorted(set(batch_ids) - set(batch_results), key=int)
+            print(
+                f"[Codex prioritizer] Detailed batch {batch_index + 1} accepted "
+                f"{len(batch_results)} of {len(batch_ids)} assessments; "
+                f"{len(missing_ids)} job(s) had no usable result: {', '.join(missing_ids)}.",
+                file=sys.stderr,
+                flush=True,
+            )
+        if progress:
+            progress(
+                batch_index + 2,
+                progress_total,
+                f"Codex assessed {len(results)} of {len(shortlist_ids)} shortlisted roles",
+            )
+    if not results:
+        if progress:
+            progress(progress_total, progress_total, "Codex returned no usable assessments; existing rankings were kept")
+        return RankingSummary(
+            candidates=len(candidates),
+            shortlisted=len(shortlist_ids),
+            assessed=0,
+            prioritized=min(len(previously_valid), TOP_LIMIT),
+            moved_to_deleted=0,
+        )
+
     assessed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    profile_digest = profile_hash(profile, locations)
 
     # Replace the current assessments and move clear backlog blockers atomically.
     candidates_by_id = {str(row["id"]): row for row in candidates}
@@ -390,6 +480,11 @@ def rank_open_jobs(
         for job_id, result in results.items()
         if result["hard_blocker"] and candidates_by_id[job_id]["list_bucket"] == "backlog"
     ]
+    preserved = {
+        str(job_id): assessment
+        for job_id, assessment in previously_valid.items()
+        if str(job_id) not in results
+    }
     moved_to_deleted = 0
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -426,6 +521,22 @@ def rank_open_jobs(
                     assessed_at,
                 ),
             )
+        for assessment in preserved.values():
+            connection.execute(
+                """INSERT INTO ai_job_assessments
+                   (job_id, score, tier, confidence, hard_blocker, summary,
+                    strengths_json, gaps_json, evidence_json, model, prompt_version,
+                    rubric_version, job_hash, profile_hash, assessed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                tuple(
+                    assessment[field]
+                    for field in (
+                        "job_id", "score", "tier", "confidence", "hard_blocker", "summary",
+                        "strengths_json", "gaps_json", "evidence_json", "model", "prompt_version",
+                        "rubric_version", "job_hash", "profile_hash", "assessed_at",
+                    )
+                ),
+            )
         for job_id in deleted_ids:
             cursor = connection.execute(
                 """UPDATE jobs SET list_bucket = 'deleted'
@@ -441,8 +552,8 @@ def rank_open_jobs(
         raise
 
     if progress:
-        progress(2, 2, f"Saved rankings and moved {moved_to_deleted} clear blockers to Deleted")
-    remaining_assessed = len(results) - moved_to_deleted
+        progress(progress_total, progress_total, f"Saved rankings and moved {moved_to_deleted} clear blockers to Deleted")
+    remaining_assessed = len(results) + len(preserved) - moved_to_deleted
     return RankingSummary(
         candidates=len(candidates),
         shortlisted=len(shortlist_ids),

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import secrets
+import sys
 import threading
 from datetime import datetime, timezone
 from typing import Any
@@ -664,15 +666,48 @@ class SearchController:
                 model=self.config.get("ai_model", "gpt-6-luna"),
                 progress=self._update_ai_progress,
             )
-            message = (
-                f"Codex prioritization complete: screened {summary.candidates} open jobs, "
-                f"assessed {summary.assessed} shortlisted roles, moved {summary.moved_to_deleted} "
-                f"clear blockers from Backlog to Deleted, and ranked up to {summary.prioritized} jobs."
-            )
+            if not summary.shortlisted:
+                message = (
+                    f"Codex screened {summary.candidates} open jobs but returned no usable shortlist. "
+                    "Existing priorities were kept unchanged."
+                )
+            elif not summary.assessed:
+                message = (
+                    f"Codex returned no usable assessments for {summary.shortlisted} shortlisted roles. "
+                    "Existing priorities were kept unchanged."
+                )
+            else:
+                message = (
+                    f"Codex prioritization complete: screened {summary.candidates} open jobs, "
+                    f"assessed {summary.assessed} of {summary.shortlisted} shortlisted roles, "
+                    f"moved {summary.moved_to_deleted} clear blockers from Backlog to Deleted, "
+                    f"and ranked up to {summary.prioritized} jobs."
+                )
             self._finish_success(message)
         except Exception as error:
+            error_detail = str(error).rstrip(". ")
+            debug_response = getattr(error, "debug_response", None)
+            if debug_response is not None:
+                if isinstance(debug_response, str):
+                    response_text = debug_response
+                else:
+                    try:
+                        response_text = json.dumps(debug_response, ensure_ascii=False, indent=2)
+                    except (TypeError, ValueError):
+                        response_text = repr(debug_response)
+                maximum_log_chars = 100_000
+                if len(response_text) > maximum_log_chars:
+                    remaining = len(response_text) - maximum_log_chars
+                    response_text = response_text[:maximum_log_chars]
+                    response_text += f"\n… [truncated {remaining} more characters]"
+                stage = getattr(error, "stage", None) or "unknown stage"
+                print(
+                    f"\n[Codex response after error in {stage}]\n{response_text}\n",
+                    file=sys.stderr,
+                    flush=True,
+                )
             self._finish_error(
-                f"Codex prioritization stopped: {error}. Previous saved priorities were kept; try again after fixing the issue."
+                f"Codex prioritization stopped: {error_detail}. Previous saved priorities were kept; try again after fixing the issue."
             )
         finally:
             connection.close()

@@ -55,7 +55,7 @@
             {% if tab == 'applied' %}Keep track of applications and follow-ups.
             {% elif tab == 'latest' %}New matching roles found by Check listings.
             {% elif tab == 'prioritized' %}Up to 50 roles, with your manual picks first and Codex-ranked roles next.
-            {% elif tab == 'deleted' %}Jobs you have moved out of consideration. Clear this list to permanently remove these jobs.
+            {% elif tab == 'deleted' %}Jobs you moved here or Codex confirmed have a mandatory mismatch. Clear this list to permanently remove these jobs.
             {% elif tab == 'profile' %}Your candidate details and the search settings the job finder uses.
             {% else %}Your saved pool of matching roles, ready to review. Check listings searches Indeed and Glassdoor, imports SEEK alerts, and removes confirmed expired jobs.{% endif %}
           </p>
@@ -157,7 +157,7 @@
           <div><strong>Codex prioritization · {{ ai_model }}</strong><small>{{ ai_candidate_count }} open jobs · {{ ai_ranked_count }} saved AI-ranked jobs · {{ manual_priority_count }} manual picks</small></div>
           <span class="local-tag">{{ 'Codex CLI found' if ai_codex_available else 'Codex CLI needed' }}</span>
         </div>
-        <p>Codex screens every open job by title, then scores descriptions for up to 100 shortlisted roles against your profile. It may use live web search for employer context. Up to 50 jobs appear here; clear mandatory mismatches in Backlog move to Deleted, where you can restore them. Manual Prioritized picks stay put. The run sends your circumstances{% if candidate_profile.resume_summary %}, optional resume summary{% endif %}, and job listing text to your signed-in Codex CLI account; that account’s usage limits apply.</p>
+        <p>Codex screens every open job by title, then scores descriptions for up to 100 shortlisted roles against your profile.</p>
         {% if not ai_codex_available %}
         <p>Install Codex CLI and sign in from Terminal with <code>codex login</code>. Restart Job Finder after installing so it can find the command.</p>
         {% else %}
@@ -262,7 +262,7 @@
              {% elif tab == 'prioritized' and not ai_ranked_count and not manual_priority_count %}Select “Prioritize top 50” to compare shortlisted roles with your profile.
              {% elif tab == 'prioritized' %}Try another location or search term. Prioritized shows only the top 50 open roles.
              {% elif tab == 'applied' %}Update a job’s status to see it in this list.
-             {% elif tab == 'deleted' %}Move unwanted jobs here from their list dropdown. They will no longer appear in Backlog or Prioritized.
+             {% elif tab == 'deleted' %}Move unwanted jobs here from their list dropdown. Codex also moves jobs here after detailed review confirms a mandatory requirement your profile rules out. A low score alone does not delete a job.
              {% elif search_state.busy %}The first search is underway. Jobs will appear here as they are found.
              {% else %}Matching jobs from your configured searches will appear here.{% endif %}</p>
         </div>
