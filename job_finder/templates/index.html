@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ tab_labels[tab] }} · Job Finder</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body data-event-id="{{ search_state.event_id }}">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="{{ url_for('index', tab='backlog') }}"><span class="brand-mark">J</span><span>Job Finder</span></a>
+      <div class="side-label">YOUR JOBS</div>
+      <nav class="main-nav" aria-label="Job lists">
+        {% for name, label in [('prioritized', 'Prioritized'), ('latest', 'Latest'), ('applied', 'Applied'), ('backlog', 'Backlog'), ('deleted', 'Deleted')] %}
+        <a class="nav-link {{ 'active' if tab == name else '' }}" href="{{ url_for('index', tab=name, location=location, q=query, dismiss_logs=1) }}">
+          <span>{{ label }}</span><span class="nav-count">{{ counts[name] }}</span>
+        </a>
+        {% endfor %}
+      </nav>
+      <div class="sidebar-controls">
+        <a class="profile-link {{ 'active' if tab == 'profile' else '' }}" href="{{ url_for('index', tab='profile', dismiss_logs=1) }}" {% if tab == 'profile' %}aria-current="page"{% endif %}>
+          <span aria-hidden="true">◎</span> Profile
+        </a>
+        <form class="sidebar-check-form" action="{{ url_for('refresh_backlog') }}" method="post">
+          <input type="hidden" name="return_tab" value="{{ tab }}">
+          <button class="primary-button" id="checkListingsButton" type="submit" {% if search_state.busy %}disabled{% endif %}>
+            <span aria-hidden="true">↻</span> Check listings
+          </button>
+        </form>
+        <details class="reset-tools">
+          <summary><span aria-hidden="true">↻</span> Reset job search</summary>
+          <p>Refresh every configured title and location, or clear saved job data and start again.</p>
+          <form action="{{ url_for('partial_reset') }}" method="post">
+            <button class="reset-option" type="submit" {% if search_state.busy %}disabled{% endif %}>Partial reset <small>Refill pool; remove confirmed expired listings</small></button>
+          </form>
+          <form action="{{ url_for('full_reset') }}" method="post" onsubmit="return confirm('Full reset permanently clears all saved jobs, application statuses, notes, and Latest history before searching again. Continue?')">
+            <button class="reset-option destructive" type="submit" {% if search_state.busy %}disabled{% endif %}>Full reset <small>Clear saved jobs and search again</small></button>
+          </form>
+        </details>
+      </div>
+      <div class="sidebar-bottom">
+        <span class="local-indicator"></span>
+        <div><strong>Saved on this Mac</strong><small>Your lists and notes stay local.</small></div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">JOB SEARCH</p>
+          <h1>{{ tab_labels[tab] }}</h1>
+          <p class="page-subtitle">
+            {% if tab == 'applied' %}Keep track of applications and follow-ups.
+            {% elif tab == 'latest' %}New matching roles found by Check listings.
+            {% elif tab == 'prioritized' %}Up to 50 roles, with your manual picks first and Codex-ranked roles next.
+            {% elif tab == 'deleted' %}Jobs you moved here or Codex confirmed have a mandatory mismatch. Clear this list to permanently remove these jobs.
+            {% elif tab == 'profile' %}Your candidate details and the search settings the job finder uses.
+            {% else %}Your saved pool of matching roles, ready to review. Check listings searches Indeed and Glassdoor, imports SEEK alerts, and removes confirmed expired jobs.{% endif %}
+          </p>
+        </div>
+        {% if tab == 'deleted' %}
+        <form action="{{ url_for('clear_deleted') }}" method="post" onsubmit="return confirm('Permanently delete all {{ counts.deleted }} job{{ 's' if counts.deleted != 1 else '' }} currently in Deleted? This removes only those jobs and their saved links and AI assessments.');">
+          <button class="danger-button" type="submit" {% if search_state.busy or not counts.deleted %}disabled{% endif %}>
+            Clear deleted jobs
+          </button>
+        </form>
+        {% elif tab == 'prioritized' %}
+        <form action="{{ url_for('prioritize_jobs') }}" method="post" {% if ai_candidate_count %}onsubmit="return confirm('Send your saved profile{% if candidate_profile.resume_summary %}, resume summary{% endif %}, and titles for {{ ai_candidate_count }} open jobs to your signed-in Codex CLI session? It will receive descriptions for up to 100 shortlisted roles and may use live web search for employer context. Clear mandatory mismatches found in Backlog will be moved to Deleted (you can move them back). Continue?');"{% endif %}>
+          <button class="primary-button" type="submit" {% if search_state.busy or not ai_codex_available or not ai_candidate_count %}disabled{% endif %}>✦ Prioritize top 50</button>
+        </form>
+        {% endif %}
+      </header>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="flash-stack">
+          {% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
+        </div>
+        {% endif %}
+      {% endwith %}
+
+      <section id="searchStatus" class="search-status {{ 'visible' if search_state.task not in ['idle', 'done'] or search_state.message != 'Your saved jobs are ready.' else '' }} {{ 'error' if search_state.error else '' }}" aria-live="polite"
+               data-task="{{ search_state.task }}">
+        <div class="status-main">
+          <span class="status-pulse" aria-hidden="true"></span>
+          <div class="status-copy">
+            <strong id="statusMessage">{{ search_state.message }}</strong>
+            <ul class="status-details" id="statusDetails">
+              {% if search_state.details %}{% for detail in search_state.details %}<li>{{ detail }}</li>{% endfor %}{% endif %}
+            </ul>
+          </div>
+        </div>
+        <div class="progress-wrap" id="progressWrap" {% if not search_state.progress %}hidden{% endif %}>
+          <div class="progress-track"><span id="progressFill" style="width:{{ (search_state.progress.done / search_state.progress.total * 100) if search_state.progress and search_state.progress.total else 0 }}%"></span></div>
+          <small id="progressLabel">{% if search_state.progress %}{{ search_state.progress.label }}{% endif %}</small>
+        </div>
+        <form class="retry-form" id="retryForm" action="{{ url_for('retry_initial') }}" method="post" {% if not search_state.can_retry_seed %}hidden{% endif %}>
+          <button class="secondary-button" type="submit">Retry initial search</button>
+        </form>
+      </section>
+
+      {% if tab == 'profile' %}
+      <section class="profile-page">
+        <div class="profile-card profile-editor">
+          <div class="profile-card-heading">
+            <span class="settings-icon">◎</span>
+            <div><h2>Your AI job-fit profile</h2><p>Codex reads this saved profile when you prioritize jobs.</p></div>
+          </div>
+          <form class="profile-form profile-page-form" action="{{ url_for('update_profile') }}" method="post">
+            <label for="candidateCircumstances">Your circumstances</label>
+            <textarea id="candidateCircumstances" name="circumstances" maxlength="4000" rows="5" placeholder="Include admission status, PLT, experience, preferred practice areas, and the kind of role you want.">{{ candidate_profile.circumstances }}</textarea>
+            <label for="candidateResume">Optional resume summary</label>
+            <textarea id="candidateResume" name="resume_summary" maxlength="8000" rows="5" placeholder="Summarize experience, skills, education, and practice areas. Avoid adding contact details you do not want sent for AI ranking.">{{ candidate_profile.resume_summary }}</textarea>
+            <div class="profile-controls">
+              <button class="save-button" type="submit">Save profile</button>
+            </div>
+          </form>
+        </div>
+
+        <section class="profile-card search-config-card">
+          <div class="profile-card-heading">
+            <span class="settings-icon">⌕</span>
+            <div><h2>Search setup</h2><p>Only job titles and locations are editable here. The search sources and limits stay at their defaults.</p></div>
+          </div>
+          <form class="profile-form search-settings-form" action="{{ url_for('update_search_settings') }}" method="post">
+            <div class="search-settings-lists">
+              <div class="search-setting-field">
+                <label for="searchTitles">Job titles <small>One title per line · {{ search_settings.titles|length }} configured</small></label>
+                <textarea id="searchTitles" name="titles" rows="5" required>{% for title in search_settings.titles %}{{ title }}{% if not loop.last %}&#10;{% endif %}{% endfor %}</textarea>
+              </div>
+              <div class="search-setting-field">
+                <label for="searchLocations">Locations <small>One location per line · {{ search_settings.locations|length }} configured</small></label>
+                <textarea id="searchLocations" name="locations" rows="5" required>{% for value in search_settings.locations %}{{ value }}{% if not loop.last %}&#10;{% endif %}{% endfor %}</textarea>
+              </div>
+            </div>
+
+            <div class="search-settings-grid">
+              <div class="config-detail">
+                <strong>Indeed and Glassdoor sources</strong>
+                <p>Indeed · Glassdoor<br>SEEK is imported separately from Gmail alerts.</p>
+              </div>
+            </div>
+
+            <div class="search-settings-actions">
+              <p>Search limits above are fixed at their defaults. Up to 100 job title and location combinations are allowed.</p>
+              <button class="save-button" type="submit">Save titles and locations</button>
+            </div>
+          </form>
+        </section>
+      </section>
+      {% else %}
+      {% if tab == 'prioritized' %}
+      <section class="ai-priority-panel">
+        <div class="ai-priority-heading">
+          <div><strong>Codex prioritization · {{ ai_model }}</strong><small>{{ ai_candidate_count }} open jobs · {{ ai_ranked_count }} saved AI-ranked jobs · {{ manual_priority_count }} manual picks</small></div>
+          <span class="local-tag">{{ 'Codex CLI found' if ai_codex_available else 'Codex CLI needed' }}</span>
+        </div>
+        <p>Codex screens every open job by title, then scores descriptions for up to 100 shortlisted roles against your profile.</p>
+        {% if not ai_codex_available %}
+        <p>Install Codex CLI and sign in from Terminal with <code>codex login</code>. Restart Job Finder after installing so it can find the command.</p>
+        {% else %}
+        <p>If you have not signed in to Codex CLI on this Mac yet, run <code>codex login</code> in Terminal.</p>
+        {% endif %}
+      </section>
+      {% endif %}
+
+      <form class="filter-bar" method="get" action="{{ url_for('index') }}" id="filterForm">
+        <input type="hidden" name="tab" value="{{ tab }}">
+        <label class="search-field"><span class="search-icon" aria-hidden="true">⌕</span>
+          <input type="search" id="jobQuery" name="q" value="{{ query }}" placeholder="Search roles or companies" autocomplete="off">
+        </label>
+        <label class="location-field"><span class="sr-only">Filter by location</span>
+          <select name="location" id="locationFilter">
+            <option value="">All locations</option>
+            {% for value in locations %}<option value="{{ value }}" {{ 'selected' if location == value else '' }}>{{ value.split(',')[0] }}</option>{% endfor %}
+          </select>
+        </label>
+      </form>
+
+      <div class="list-toolbar">
+        <span class="result-count">{{ total }} {{ 'job' if total == 1 else 'jobs' }}</span>
+        {% if tab == 'latest' %}<span class="fresh-legend"><i></i> Added in the latest check</span>{% endif %}
+      </div>
+
+      <section class="job-list" aria-label="{{ tab_labels[tab] }} jobs">
+        {% for job in jobs %}
+        <article class="job-card">
+          <div class="job-card-main">
+            <div class="job-heading-row">
+              <h2>{{ job.title or 'Untitled role' }}</h2>
+              {% if job.latest_new %}<span class="fresh-dot" title="Added in the latest check" aria-label="New in latest check"></span>{% endif %}
+            </div>
+            <div class="job-meta">
+              <span class="company">{{ job.company or 'Unknown company' }}</span>
+              {% if job.location %}<span>{{ job.location }}</span>{% endif %}
+              {% if job.date_posted %}<span>Posted {{ job.date_posted }}</span>{% endif %}
+            </div>
+            {% if tab == 'prioritized' %}
+            {% if job.manual_priority %}<span class="manual-priority-tag">Manually prioritized</span>{% endif %}
+            {% if job.ai_score is defined %}<section class="ai-rank-card">
+              <span class="ai-rank-number">#{{ loop.index }}</span>
+              <span class="ai-score">{{ job.ai_score }}<small>/100</small></span>
+              <div class="ai-rank-copy">
+                <strong>{{ job.ai_tier.replace('_', ' ')|title }} · {{ job.ai_confidence }} confidence</strong>
+              </div>
+            </section>
+            {% endif %}
+            {% endif %}
+            {% if job.sources %}
+            <div class="source-list" aria-label="Job board links">
+              {% for group in job.source_groups %}
+                {% if group.urls|length == 1 %}
+                  <a class="source-chip" href="{{ group.urls[0] }}" target="_blank" rel="noopener noreferrer">{{ group.source }} <span aria-hidden="true">↗</span></a>
+                {% else %}
+                  <details class="source-group">
+                    <summary class="source-chip">{{ group.source }} <span class="source-count">{{ group.urls|length }}</span></summary>
+                    <div class="source-menu">
+                      {% for source_url in group.urls %}<a href="{{ source_url }}" target="_blank" rel="noopener noreferrer">{{ group.source }} listing {{ loop.index }} <span aria-hidden="true">↗</span></a>{% endfor %}
+                    </div>
+                  </details>
+                {% endif %}
+              {% endfor %}
+            </div>
+            {% elif job.url %}<div class="source-list"><a class="source-chip" href="{{ job.url }}" target="_blank" rel="noopener noreferrer">Open listing <span aria-hidden="true">↗</span></a></div>{% endif %}
+          </div>
+          <div class="job-actions">
+            <form class="job-edit" action="{{ url_for('update_job', job_id=job.id) }}" method="post">
+              <input type="hidden" name="tab" value="{{ tab }}">
+              <input type="hidden" name="location" value="{{ location }}">
+              <input type="hidden" name="q" value="{{ query }}">
+              <input type="hidden" name="page" value="{{ page }}">
+              <label class="sr-only" for="placement-{{ job.id }}">Move job or update application status</label>
+              <select id="placement-{{ job.id }}" name="placement">
+                <optgroup label="Move to list">
+                  {% for bucket in job_buckets %}<option value="{{ bucket }}" {{ 'selected' if bucket == job.placement else '' }}>{{ bucket.replace('_', ' ').title() }}</option>{% endfor %}
+                </optgroup>
+                <optgroup label="Application status">
+                  {% for status in application_statuses %}<option value="{{ status }}" {{ 'selected' if status == job.placement else '' }}>{{ status.replace('_', ' ').title() }}</option>{% endfor %}
+                </optgroup>
+              </select>
+              <label class="sr-only" for="notes-{{ job.id }}">Notes</label>
+              <input id="notes-{{ job.id }}" type="text" name="notes" value="{{ job.notes }}" maxlength="2000" placeholder="Add a note">
+              <button class="save-button" type="submit">Save</button>
+            </form>
+          </div>
+          {% if job.description_text %}
+          <details class="job-description">
+            <summary><span>View job description</span><span class="dropdown-chevron" aria-hidden="true"><svg viewBox="0 0 12 12"><path d="m2.5 4 3.5 3.5L9.5 4" /></svg></span></summary>
+            <div class="description-copy">{{ job.description_text }}</div>
+          </details>
+          {% endif %}
+        </article>
+        {% else %}
+        <div class="empty-state">
+          <div class="empty-icon">{% if tab in ['latest', 'prioritized'] %}✦{% elif tab == 'applied' %}✓{% else %}⌕{% endif %}</div>
+          <h2>{% if tab == 'latest' %}No latest jobs yet{% elif tab == 'prioritized' and not ai_candidate_count and not manual_priority_count %}No open jobs to prioritize{% elif tab == 'prioritized' and not ai_codex_available and ai_candidate_count %}Set up Codex CLI{% elif tab == 'prioritized' and not ai_ranked_count and not manual_priority_count %}No AI rankings yet{% elif tab == 'prioritized' %}No prioritized jobs match these filters{% elif tab == 'applied' %}No applications tracked yet{% elif tab == 'deleted' %}No deleted jobs{% else %}Your backlog is empty{% endif %}</h2>
+          <p>{% if tab == 'latest' %}Use “Check listings” in the sidebar to search for new roles.
+             {% elif tab == 'prioritized' and not ai_candidate_count %}New and saved jobs will be ranked here after they are collected.
+             {% elif tab == 'prioritized' and not ai_codex_available %}Install Codex CLI and sign in with <code>codex login</code>, then restart Job Finder.
+             {% elif tab == 'prioritized' and not ai_ranked_count and not manual_priority_count %}Select “Prioritize top 50” to compare shortlisted roles with your profile.
+             {% elif tab == 'prioritized' %}Try another location or search term. Prioritized shows only the top 50 open roles.
+             {% elif tab == 'applied' %}Update a job’s status to see it in this list.
+             {% elif tab == 'deleted' %}Move unwanted jobs here from their list dropdown. Codex also moves jobs here after detailed review confirms a mandatory requirement your profile rules out. A low score alone does not delete a job.
+             {% elif search_state.busy %}The first search is underway. Jobs will appear here as they are found.
+             {% else %}Matching jobs from your configured searches will appear here.{% endif %}</p>
+        </div>
+        {% endfor %}
+      </section>
+
+      {% if total > page_size %}
+      <nav class="pagination" aria-label="Job list pages">
+        {% if page > 1 %}<a class="secondary-button" href="{{ url_for('index', tab=tab, location=location, q=query, page=page-1) }}">← Previous</a>{% else %}<span></span>{% endif %}
+        <span>Page {{ page }} of {{ ((total - 1) // page_size) + 1 }}</span>
+        {% if page * page_size < total %}<a class="secondary-button" href="{{ url_for('index', tab=tab, location=location, q=query, page=page+1) }}">Next →</a>{% endif %}
+      </nav>
+      {% endif %}
+
+      {% if tab == 'latest' %}<p class="list-note">Latest keeps up to {{ latest_limit }} jobs. Older items are trimmed from Latest only; their list placement stays the same.</p>{% endif %}
+      {% if tab == 'prioritized' %}<p class="list-note">Manual picks appear first, followed by Codex’s highest-scoring roles. Clear mandatory mismatches from Backlog move to Deleted; this does not permanently remove them.</p>{% endif %}
+      {% endif %}
+    </main>
+  </div>
+</body>
+</html>

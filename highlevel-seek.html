@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f6f8">
+  <title>Job Finder — High-level app map</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172235;
+      --muted: #637083;
+      --line: #dce2e9;
+      --paper: #ffffff;
+      --wash: #f5f6f8;
+      --blue: #335cce;
+      --blue-soft: #edf2ff;
+      --teal: #087e78;
+      --teal-soft: #e7f6f4;
+      --amber: #a45c0a;
+      --amber-soft: #fff4e3;
+      --violet: #7545a5;
+      --violet-soft: #f4edfb;
+      --shadow: 0 16px 44px rgba(24, 39, 65, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--wash);
+      color: var(--ink);
+      font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .page { max-width: 1180px; margin: 0 auto; padding: 48px 28px 64px; }
+    .eyebrow { color: var(--blue); font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { max-width: 760px; margin: 10px 0 12px; font-size: clamp(36px, 6vw, 58px); line-height: 1.02; letter-spacing: -.045em; }
+    .intro { max-width: 760px; color: var(--muted); font-size: 18px; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 25px 0 34px; }
+    button {
+      appearance: none; border: 1px solid var(--line); border-radius: 9px; padding: 9px 13px;
+      background: var(--paper); color: var(--ink); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+    }
+    button:hover { border-color: #aab7c7; }
+    button[aria-pressed="true"] { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
+    .toolbar .hint { margin-left: 4px; color: var(--muted); font-size: 13px; }
+    h2 { margin: 0 0 8px; font-size: 25px; letter-spacing: -.025em; }
+    .section-copy { margin: 0 0 20px; color: var(--muted); }
+    .flow-shell { overflow-x: auto; padding: 8px 2px 18px; }
+    .flow { display: grid; grid-template-columns: 1.08fr 42px 1.28fr 42px 1.12fr 42px 1.15fr; align-items: stretch; min-width: 980px; }
+    .arrow { display: grid; place-items: center; color: #96a3b4; font-size: 23px; }
+    .card, .panel { border: 1px solid var(--line); border-radius: 15px; background: var(--paper); box-shadow: var(--shadow); }
+    .card { padding: 18px; }
+    .card h3 { margin: 0 0 12px; font-size: 16px; }
+    .step { display: inline-grid; width: 25px; height: 25px; margin-right: 7px; place-items: center; border-radius: 8px; background: var(--blue-soft); color: var(--blue); font-size: 12px; }
+    .source { padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .source + .source { margin-top: 9px; }
+    .source strong { display: block; font-size: 14px; }
+    .source small, .micro { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .source.gmail { border-color: #ead4b4; background: var(--amber-soft); }
+    .source.pause { border-style: dashed; background: #fafafa; }
+    .source .tag { float: right; color: var(--amber); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+    .filter-card { border-color: #cbd6fa; background: linear-gradient(180deg, #fff, #f9faff); }
+    .filter { margin-top: 10px; padding: 10px; border-radius: 9px; background: var(--blue-soft); color: #294aa9; font-size: 12px; }
+    .filter strong { display: block; margin-bottom: 3px; }
+    .merge-card { border-color: #bde2dd; background: linear-gradient(180deg, #fff, #f7fcfb); }
+    .merge-card .filter { background: var(--teal-soft); color: #086b65; }
+    .merge-chip { display: inline-block; margin: 10px 4px 0 0; padding: 5px 8px; border-radius: 999px; background: var(--teal-soft); color: var(--teal); font-size: 11px; font-weight: 700; }
+    .store-card { display: flex; flex-direction: column; justify-content: center; text-align: center; }
+    .db-icon { display: grid; width: 60px; height: 60px; margin: 3px auto 14px; place-items: center; border: 1px solid #bdd1ff; border-radius: 18px; background: var(--blue-soft); color: var(--blue); font-size: 24px; }
+    .store-card p { margin: 0; color: var(--muted); font-size: 12px; }
+    .ui-section { display: grid; grid-template-columns: 1.1fr .9fr; gap: 22px; margin-top: 32px; align-items: start; }
+    .panel { padding: 22px; }
+    .panel p { margin: 0; color: var(--muted); }
+    .mock-window { overflow: hidden; margin-top: 17px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcfe; }
+    .window-bar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: #f5f7fa; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #c2cad4; }
+    .window-title { margin-left: 7px; color: var(--muted); font-size: 11px; }
+    .app-body { display: grid; grid-template-columns: 125px 1fr; min-height: 230px; }
+    .side { padding: 13px 9px; border-right: 1px solid var(--line); background: #fff; }
+    .brand { margin: 0 0 15px 4px; font-size: 12px; font-weight: 800; }
+    .nav { margin: 4px 0; padding: 7px 8px; border-radius: 7px; color: var(--muted); font-size: 11px; }
+    .nav.active { background: var(--blue-soft); color: var(--blue); font-weight: 700; }
+    .job-area { padding: 14px; }
+    .job-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .job-top strong { font-size: 14px; }
+    .search-pill { padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); font-size: 10px; }
+    .job-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 9px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+    .job-row strong { display: block; font-size: 11px; }
+    .job-row small { color: var(--muted); font-size: 10px; }
+    .badge { align-self: start; padding: 4px 6px; border-radius: 999px; background: var(--teal-soft); color: var(--teal); font-size: 9px; font-weight: 800; }
+    .badge.applied { background: var(--violet-soft); color: var(--violet); }
+    .features { display: grid; gap: 10px; margin-top: 18px; }
+    .feature { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: start; }
+    .feature-icon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: var(--blue-soft); color: var(--blue); font-size: 13px; font-weight: 800; }
+    .feature strong { display: block; font-size: 13px; }
+    .feature small { color: var(--muted); font-size: 12px; }
+    .note { display: flex; gap: 12px; margin-top: 22px; padding: 15px 17px; border: 1px solid #ead4b4; border-radius: 12px; background: var(--amber-soft); color: #75450e; font-size: 13px; }
+    .note strong { white-space: nowrap; }
+    footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+    [data-layer] { transition: opacity .2s ease, filter .2s ease; }
+    body[data-focus="sources"] [data-layer]:not([data-layer="sources"]),
+    body[data-focus="filters"] [data-layer]:not([data-layer="filters"]),
+    body[data-focus="ui"] [data-layer]:not([data-layer="ui"]) { opacity: .2; filter: grayscale(.8); }
+    @media (max-width: 760px) {
+      .page { padding: 32px 17px 44px; }
+      .ui-section { grid-template-columns: 1fr; }
+      .flow { min-width: 940px; }
+      .note { flex-direction: column; gap: 3px; }
+    }
+    @media print {
+      body { background: #fff; }
+      .page { max-width: none; padding: 18px; }
+      .toolbar { display: none; }
+      .card, .panel { box-shadow: none; }
+      [data-layer] { opacity: 1 !important; filter: none !important; }
+    }
+  </style>
+</head>
+<body data-focus="all">
+  <main class="page">
+    <div class="eyebrow">Product map · early concept</div>
+    <h1>One place to find and track the jobs worth applying for.</h1>
+    <p class="intro">A simple pipeline takes searches from multiple job sources, applies the user’s criteria, removes duplicates, and presents a clean list with application tracking.</p>
+
+    <div class="toolbar" aria-label="Highlight a part of the diagram">
+      <button type="button" data-focus-button="all" aria-pressed="true">Show all</button>
+      <button type="button" data-focus-button="sources" aria-pressed="false">Sources</button>
+      <button type="button" data-focus-button="filters" aria-pressed="false">Filters &amp; matching</button>
+      <button type="button" data-focus-button="ui" aria-pressed="false">User interface</button>
+      <button type="button" id="print-button">Print / save PDF</button>
+      <span class="hint">Tap a focus button to emphasize that stage.</span>
+    </div>
+
+    <section aria-labelledby="pipeline-title">
+      <h2 id="pipeline-title">How the app works</h2>
+      <p class="section-copy">Check listings searches Indeed and Glassdoor with JobSpy, imports labelled SEEK alerts from Gmail, and then checks saved listing links for expiry.</p>
+      <div class="flow-shell">
+        <div class="flow">
+          <article class="card" data-layer="sources">
+            <h3><span class="step">1</span>Job sources</h3>
+            <div class="source"><strong>Indeed</strong><small>Search by role keywords and location</small></div>
+            <div class="source"><strong>Glassdoor</strong><small>Search by role keywords and location</small></div>
+            <div class="source gmail"><span class="tag">Check listings</span><strong>SEEK alert emails</strong><small>Import messages with the Gmail label SEEK</small></div>
+          </article>
+          <div class="arrow" aria-hidden="true">→</div>
+          <article class="card filter-card" data-layer="filters">
+            <h3><span class="step">2</span>Per-source filters</h3>
+            <div class="filter"><strong>Search criteria</strong>Role titles · locations · 24-hour freshness window</div>
+            <div class="filter"><strong>Shared request cap</strong>1,000–2,000 results across Indeed and Glassdoor</div>
+            <span class="micro">Each configured title and location is searched across both boards.</span>
+          </article>
+          <div class="arrow" aria-hidden="true">→</div>
+          <article class="card merge-card" data-layer="filters">
+            <h3><span class="step">3</span>Combine &amp; clean</h3>
+            <div class="filter"><strong>Normalize</strong>Put listings into one shared format</div>
+            <div class="filter"><strong>Deduplicate</strong>Match same roles across sources</div>
+            <div class="filter"><strong>Expiry check</strong>Remove listings only when the source confirms closure</div>
+            <span class="merge-chip">New</span><span class="merge-chip">Fresh</span><span class="merge-chip">Matches</span>
+          </article>
+          <div class="arrow" aria-hidden="true">→</div>
+          <article class="card store-card" data-layer="filters">
+            <div class="db-icon" aria-hidden="true">▤</div>
+            <h3><span class="step">4</span>Master job list</h3>
+            <p>Keep one record per job, source links, first-seen date, status, and notes.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="ui-section" data-layer="ui" aria-labelledby="ui-title">
+      <article class="panel">
+        <h2 id="ui-title">5 · A small, useful UI</h2>
+        <p>The user sees the matches in one place, can open the original listing, and can keep track of what happens next.</p>
+        <div class="mock-window" role="img" aria-label="Illustrative job tracker screen with navigation, job search, new job cards, and applied status">
+          <div class="window-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="window-title">Job Finder · My jobs</span></div>
+          <div class="app-body">
+            <aside class="side"><div class="brand">◈ Job Finder</div><div class="nav active">All jobs</div><div class="nav">New matches</div><div class="nav">Saved</div><div class="nav">Applied</div><div class="nav">Search settings</div></aside>
+            <div class="job-area">
+              <div class="job-top"><strong>Matching jobs</strong><span class="search-pill">Perth · Analyst · Last 7 days</span></div>
+              <div class="job-row"><div><strong>Graduate Policy Analyst</strong><small>Example employer · Perth · Indeed · Posted today</small></div><span class="badge">NEW</span></div>
+              <div class="job-row"><div><strong>Junior Business Analyst</strong><small>Example employer · Hybrid · Glassdoor · Posted 2 days ago</small></div><span class="badge">NEW</span></div>
+              <div class="job-row"><div><strong>Graduate Consultant</strong><small>Example employer · Perth · Saved note: follow up</small></div><span class="badge applied">APPLIED</span></div>
+            </div>
+          </div>
+        </div>
+      </article>
+      <article class="panel">
+        <h2>What the user can do</h2>
+        <p>Keep the first interface focused on the job hunt itself.</p>
+        <div class="features">
+          <div class="feature"><span class="feature-icon">⌕</span><div><strong>Refine searches</strong><small>Choose role terms, several locations, sources, and freshness.</small></div></div>
+          <div class="feature"><span class="feature-icon">✦</span><div><strong>Spot new matches</strong><small>See newly found and recently posted roles clearly.</small></div></div>
+          <div class="feature"><span class="feature-icon">↗</span><div><strong>Open the original listing</strong><small>Go directly to the employer or job-board application page.</small></div></div>
+          <div class="feature"><span class="feature-icon">✓</span><div><strong>Track progress</strong><small>Save, applied, interviewing, rejected, or closed, with notes.</small></div></div>
+        </div>
+      </article>
+    </section>
+
+    <div class="note"><strong>Current build</strong><span>The repo has a local Flask web app with SQLite storage, JobSpy search for Indeed and Glassdoor, and SEEK email import through Gmail OAuth, all started by Check listings. Suitability ranking is a separate, opt-in AI action in the Prioritized tab. This page is a high-level map, not a report of live Gmail connection status.</span></div>
+    <footer>Concept map for the Job Finder project · Static page · No data is collected by this page.</footer>
+  </main>
+  <script>
+    const buttons = document.querySelectorAll('[data-focus-button]');
+    buttons.forEach((button) => button.addEventListener('click', () => {
+      document.body.dataset.focus = button.dataset.focusButton;
+      buttons.forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+    }));
+    document.getElementById('print-button').addEventListener('click', () => window.print());
+  </script>
+</body>
+</html>

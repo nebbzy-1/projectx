@@ -1,0 +1,33 @@
+[search]
+# Each title is searched in each listed location.
+titles = ["Graduate Lawyer", "Junior Lawyer", "Associate Lawyer"]
+locations = [
+  "Perth, WA, Australia",
+  "Melbourne, VIC, Australia",
+  "Sydney, NSW, Australia",
+  "Brisbane, QLD, Australia",
+]
+sites = ["indeed", "glassdoor"]
+results_per_site = { indeed = 25, glassdoor = 25 }
+hours_old = 24
+country_indeed = "Australia"
+# Check listings caps a combined Indeed/Glassdoor refresh at this many requested results.
+check_results_total = 1500
+
+[gmail]
+# Add this label to SEEK alert messages in Gmail. Check listings imports existing labelled messages too.
+query = "label:SEEK"
+max_messages = 250
+# Retention threshold, in days, for previously imported SEEK alert cleanup.
+stale_after_days = 90
+
+[ai]
+# The local Codex CLI runs only when requested from the Prioritized tab.
+model = "gpt-6-luna"
+
+[initial_import]
+# Seed the backlog once on the first app launch.
+enabled = true
+# This cap is split between enabled sites for each title/location pair.
+results_per_title_location = 250
+

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Job Prioritization Results",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["results"],
+  "properties": {
+    "results": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "job_id",
+          "score",
+          "tier",
+          "confidence",
+          "hard_blocker",
+          "hard_blocker_type"
+        ],
+        "properties": {
+          "job_id": { "type": "string", "minLength": 1 },
+          "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "tier": {
+            "type": "string",
+            "enum": ["strong_fit", "possible_fit", "weak_fit", "insufficient_information"]
+          },
+          "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+          "hard_blocker": { "type": "boolean" },
+          "hard_blocker_type": {
+            "type": "string",
+            "enum": [
+              "none",
+              "mandatory_pqe_exceeds_limit",
+              "strict_location_outside_allowed",
+              "other_explicit_unmet_requirement"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
